@@ -1,0 +1,23 @@
+# Houdini が自動で作るもの
+backup/
+*.hip.bak
+*.hiplc.bak
+*.hipnc.bak
+*.hda.bak
+*.hdalc.bak
+*.hdanc.bak
+*_bak*.hda
+*_bak*.hdalc
+*_bak*.hdanc
+flipbook/
+render/
+*.sim
+*.bgeo.sc
+*.vdb
+
+# OS / エディタ
+Thumbs.db
+.DS_Store
+desktop.ini
+__pycache__/
+*.pyc
