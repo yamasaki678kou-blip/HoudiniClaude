@@ -1,0 +1,12 @@
+# Houdini と書き出し結果はバイナリ扱い（改行コードを変換しない）
+*.hip binary
+*.hiplc binary
+*.hipnc binary
+*.hda binary
+*.hdalc binary
+*.hdanc binary
+*.fbx binary
+*.exr binary
+*.png binary
+*.gif binary
+*.bgeo.sc binary
