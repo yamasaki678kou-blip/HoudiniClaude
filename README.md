@@ -12,6 +12,8 @@ Houdini で使える「汎用的なツール / HDA」を作り続けるリポジ
 | # | フォルダ | 内容 | 主な技術 |
 |---|---|---|---|
 | 01 | [tools/01_mech_transform](tools/01_mech_transform/) | メカ変形パーツ。スライド・ヒンジ・ピストンなどの機構を属性で動かし、VAT（Vertex Animation Texture）で書き出す | パックドプリミティブ、VEX、SideFX Labs VAT ROP |
+| 02 | [tools/02_brick_wall](tools/02_brick_wall/) | レンガ壁ジェネレーター。レンガ・タイル・石積みを、段ずらし・目地・ばらつき・抜けつきで敷き詰める | VEX で点を作る、Copy to Points、ボックス投影 UV |
+| 03 | [tools/03_pipe_run](tools/03_pipe_run/) | 配管ジェネレーター。折れ線から角の丸い配管を作り、フランジ・バンド・取り付け金具を付ける | PolyBevel、Sweep、PolyFrame、Copy to Points、VEX |
 
 ## 動作環境
 
