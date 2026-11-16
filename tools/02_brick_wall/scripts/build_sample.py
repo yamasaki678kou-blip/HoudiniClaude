@@ -599,7 +599,7 @@ def render_docs():
     ogl.parm("tres").set(1)
     ogl.parm("aamode").set("aa8")
     ogl.parm("shadows").set(0)          # 影は縞模様のノイズが出やすいので切る
-    ogl.parm("ambocclusion").set(1)     # 代わりに環境遮蔽で奥行きを出す
+    ogl.parm("ambocclusion").set(0)     # 画面空間の環境遮蔽も縞が出るので切る
     ogl.parm("trange").set(0)
     if not os.path.isdir(IMG_DIR):
         os.makedirs(IMG_DIR)
@@ -612,8 +612,15 @@ def render_docs():
         cam.parmTuple("t").set((target[0] + dist * cp * sy, target[1] + dist * sp, target[2] + dist * cp * cy))
         cam.parmTuple("r").set((-pitch, yaw, 0))
         ogl.parm("vobjects").set(vobjects)
-        ogl.parm("picture").set(IMG_DIR + "/" + tag + ".png")
+        # 2 倍の大きさで描いてから縮小する（細かい模様のちらつきを減らす）
+        cam.parmTuple("res").set((res[0] * 2, res[1] * 2))
+        ogl.parmTuple("res").set((res[0] * 2, res[1] * 2))
+        tmp = IMG_DIR + "/_" + tag + "_2x.png"
+        ogl.parm("picture").set(tmp)
         ogl.render()
+        from PIL import Image
+        Image.open(tmp).convert("RGB").resize(res, Image.LANCZOS).save(IMG_DIR + "/" + tag + ".png")
+        os.remove(tmp)
         print("image:", tag)
 
     shoot("catalog", (1600, 640), (0, 1.1, 0), 21.0, 9, 5)
