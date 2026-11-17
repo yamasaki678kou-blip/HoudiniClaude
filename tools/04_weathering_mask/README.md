@@ -89,6 +89,7 @@ Tab メニューで **HoudiniClaude ▸ Weathering Mask** を置き、メッシ�
 | | Noise | ノイズでマスクを欠けさせる量 |
 | Noise | Seed / Frequency | ノイズのタネと細かさ（1 m に何回） |
 | Output | Preview | Material Preview / Packed / Edge / Cavity / Top / Bottom |
+| | Write Alpha (for FBX) | Packed のとき、地際のマスクを `Alpha` にも書く。**ビューポートでは透けて見えるので、FBX に書き出すときだけオン** |
 | | Base, Edge, Dirt, Dust, Grime Color | Material Preview で使う色 |
 
 曲率（角とへこみ）は **モデル全体の大きさで割った相対値** なので、Edge Width と Cavity Width はモデルごとに調整してください。
@@ -97,13 +98,13 @@ Preview を Edge や Cavity にして白黒で見ながら、ちょうどよい�
 ### 出力の形
 
 - どの Preview でも、ポイント属性 `mask_edge`、`mask_cavity`、`mask_top`、`mask_bottom`（0〜1）が付きます。ほかのノードで使えます（例: `mask_top` で雪のジオメトリをスキャッターする）。
-- **Packed** のとき: `Cd` = (角, へこみ, 上向き)、`Alpha` = 地際。Unity に持っていく形です。
+- **Packed** のとき: `Cd` = (角, へこみ, 上向き)。**Write Alpha** をオンにすると `Alpha` = 地際も書きます。Unity に持っていく形です。
 - **Material Preview** のとき: `Cd` にマスクで混ぜた見本の色が入ります。見た目の確認用です。
 - 途中計算の `curvature`（曲率）と `ao`（遮蔽、1 = 開けている）も点に残っています。Geometry Spreadsheet で見られます。
 
 ## Unity に持っていく
 
-1. Preview を **Packed** にした状態で FBX に書き出します。サンプルでは `export_packed` というオブジェクト（4 つの小物の形を [Object Merge](https://www.sidefx.com/docs/houdini/nodes/sop/object_merge.html) で集めて Packed にしたもの）を、`/out` の `fbx_export_packed`（[FBX ROP](https://www.sidefx.com/docs/houdini/nodes/out/filmboxfbx.html)）で書き出しています。**Render** を押すと `export/` に出ます。
+1. Preview を **Packed**、**Write Alpha** をオンにした状態で FBX に書き出します。サンプルでは `export_packed` というオブジェクト（4 つの小物の形を [Object Merge](https://www.sidefx.com/docs/houdini/nodes/sop/object_merge.html) で集めて Packed + Write Alpha にしたもの）を、`/out` の `fbx_export_packed`（[FBX ROP](https://www.sidefx.com/docs/houdini/nodes/out/filmboxfbx.html)）で書き出しています。**Render** を押すと `export/` に出ます。
    自分のシーンでは、FBX ROP の **Start Node** を書き出すオブジェクトに、**Output File** を好きな場所にして Render します。Convert Units はオン、**Export Invisible Objects** は "As Visible Full Nodes" にしてあります（表示を切ったオブジェクトも中身ごと書き出すため）。
 2. FBX を Unity の `Assets/` に入れます。頂点カラーは自動で入ります。
 3. Shader Graph で **Vertex Color** ノードを置き、**Split** で R / G / B / A に分けます。
@@ -118,7 +119,8 @@ Preview を Edge や Cavity にして白黒で見ながら、ちょうどよい�
 | 上面（Top）が全部 0、へこみ（Cavity）が全部 1 | 法線が内側を向いている。[Box](https://www.sidefx.com/docs/houdini/nodes/sop/box.html) の Divisions で分割した箱はこうなるので、分割なしの Box に Subdivide をかける。[Reverse](https://www.sidefx.com/docs/houdini/nodes/sop/reverse.html) で向きを直してもよい |
 | 遅い | AO Weight を 0 にする（AO の計算を省く）か、AO Samples を減らす。Subdivide の回数を減らす |
 | まだらが細かすぎる / 粗すぎる | Noise の Frequency を変える |
-| Unity で色が出ない | Preview が Packed か。シェーダーが Vertex Color を読んでいるか |
+| Packed にしたら、上のほうが透けて消えた | Write Alpha がオン。`Alpha` はビューポートで透明度として表示されます。確認中はオフにして、書き出すときだけオンに |
+| Unity で色が出ない / 地際（A）が入らない | Preview が Packed か。Write Alpha がオンか。シェーダーが Vertex Color を読んでいるか |
 | FBX が空（数 KB） | FBX ROP の Export Invisible Objects を "As Visible Full Nodes" にする（表示オフのオブジェクトは既定だと中身が書き出されない） |
 
 ## 仕組みを知りたい

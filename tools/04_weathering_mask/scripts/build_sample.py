@@ -93,9 +93,11 @@ if (mode == 0)
 }
 else if (mode == 1)
 {
-    // Packed: R = 角, G = へこみ, B = 上向き, Alpha = 地際（Unity へ持っていく形）
-    v@Cd    = set(edge, cavity, top);
-    f@Alpha = bottom;
+    // Packed: R = 角, G = へこみ, B = 上向き（Unity へ持っていく形）
+    v@Cd = set(edge, cavity, top);
+    // 地際は Alpha に入れます。ただし Alpha があるとビューポートで透けて見えるので、
+    // FBX に書き出すときだけ Write Alpha をオンにします。
+    if (chi("../write_alpha")) f@Alpha = bottom;
 }
 else if (mode == 2) v@Cd = edge;     // 白黒でマスクを 1 つずつ確認する
 else if (mode == 3) v@Cd = cavity;
@@ -169,8 +171,11 @@ Seed / Frequency:
 == Output ==
 
 Preview:
-    Material Preview: マスクで色を混ぜた見本。Packed: R = 角, G = へこみ, B = 上向き, Alpha = 地際。
+    Material Preview: マスクで色を混ぜた見本。Packed: R = 角, G = へこみ, B = 上向き。
     Edge / Cavity / Top / Bottom: マスクを 1 つずつ白黒で見る。
+Write Alpha:
+    Packed のとき、地際のマスクを `Alpha` にも書きます。FBX の頂点カラーの A に入ります。
+    Alpha があるとビューポートでは透けて見えるので、書き出すときだけオンにしてください。
 Preview Colors:
     Material Preview で使う色（下地、角、汚れ、ほこり、苔）。
 
@@ -248,7 +253,9 @@ def hda_parm_templates():
     f = hou.FolderParmTemplate("fd_out", "Output", folder_type=S)
     f.addParmTemplate(hou.MenuParmTemplate("preview", "Preview", PREVIEW_MODES,
                                            ("Material Preview", "Packed (RGB + Alpha)", "Edge", "Cavity", "Top", "Bottom"), default_value=0,
-                                           help="Material Preview: マスクで色を混ぜた見本。Packed: R = 角, G = へこみ, B = 上向き, Alpha = 地際。ほかは白黒で 1 つずつ。"))
+                                           help="Material Preview: マスクで色を混ぜた見本。Packed: R = 角, G = へこみ, B = 上向き。ほかは白黒で 1 つずつ。"))
+    f.addParmTemplate(hou.ToggleParmTemplate("write_alpha", "Write Alpha (for FBX)", default_value=False, disable_when="{ preview != packed }",
+                                             help="Packed のとき、地際のマスクを Alpha にも書きます（FBX の頂点カラーの A）。ビューポートでは透けて見えるので、書き出すときだけオンに。"))
     f.addParmTemplate(color_parm("preview_base", "Base Color", (0.55, 0.36, 0.22), "下地の色。"))
     f.addParmTemplate(color_parm("preview_edge", "Edge Color", (0.82, 0.82, 0.85), "角の擦れで見える色（金属など）。"))
     f.addParmTemplate(color_parm("preview_dirt", "Dirt Color", (0.12, 0.10, 0.08), "へこみの汚れの色。"))
@@ -449,7 +456,7 @@ PROPS = [
      "試してみよう:\n・Cavity Width を変えると、入り隅の汚れの幅が変わります\n・Noise の Frequency を 20 にすると、まだら模様が細かくなります"),
     ("prop_barrel", "barrel", 4.8, {"edge_width": 0.35, "cavity_ao": 1.0, "top_noise": 0.3},
      "【樽】\n筒に 3 本の帯を巻いています。帯の角が擦れ、帯の下に汚れがたまります。\n\n"
-     "試してみよう:\n・Seed を変えると、まだらの出方が変わります\n・Preview を Packed にすると、Unity に持っていく RGB + Alpha の形になります（赤 = 角、緑 = へこみ、青 = 上面）"),
+     "試してみよう:\n・Seed を変えると、まだらの出方が変わります\n・Preview を Packed にすると、Unity に持っていく RGB の形になります（赤 = 角、緑 = へこみ、青 = 上面）"),
 ]
 
 
@@ -498,6 +505,7 @@ def build_sample():
     wm = geo.createNode(HDA_TYPE, "weathering_mask1")
     wm.setInput(0, m)
     wm.parm("preview").set("packed")
+    wm.parm("write_alpha").set(1)
     wm.setColor(hou.Color((0.3, 0.75, 0.45)))
     out = geo.createNode("null", "OUT")
     out.setInput(0, wm)
@@ -506,7 +514,7 @@ def build_sample():
     geo.setDisplayFlag(False)
     geo.layoutChildren()
     sticky = geo.createStickyNote()
-    sticky.setText("【Unity 向けの書き出し用】\n4 つの小物の形を Object Merge で集めて、Preview = Packed で\n"
+    sticky.setText("【Unity 向けの書き出し用】\n4 つの小物の形を Object Merge で集めて、Preview = Packed + Write Alpha で\n"
                    "マスクを Cd の RGB と Alpha に詰めています。\n/out の fbx_export_packed で FBX にします。\n"
                    "（表示はオフにしてあります。見たいときはオブジェクトの表示をオンに）")
     sticky.setSize(hou.Vector2(8.0, 3.2))

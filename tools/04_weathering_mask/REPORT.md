@@ -98,15 +98,18 @@ if (mode == 0)            // Material Preview: マスクで色を混ぜる
     col = lerp(col, grime, bottom);
     v@Cd = col;
 }
-else if (mode == 1)       // Packed: RGB + Alpha に詰める
+else if (mode == 1)       // Packed: RGB (+ Alpha) に詰める
 {
-    v@Cd    = set(edge, cavity, top);
-    f@Alpha = bottom;
+    v@Cd = set(edge, cavity, top);
+    if (chi("../write_alpha")) f@Alpha = bottom;   // 書き出すときだけ
 }
 ```
 
 Material Preview は、Unity のシェーダーでやることをそのまま VEX で書いたものです（下の色からマスクの順に `lerp` で上書き）。
 Packed は、4 つのマスクを `Cd` の RGB と `Alpha` の 4 チャンネルに詰めます。FBX の頂点カラーは RGBA なので、ちょうど 4 つ入ります。
+
+ただし `Alpha` は、Houdini のビューポートでは **透明度** として表示されます。地際以外は `Alpha = 0` なので、小物の上半分が消えて見えました（最初に作ったカタログ画像は、ほとんど空っぽでした）。
+そこで Alpha を書くのは **Write Alpha** をオンにしたときだけにして、ふだんの確認では RGB だけを見るようにしています。
 
 ## 6. 踏んだ落とし穴
 
@@ -122,6 +125,11 @@ Packed は、4 つのマスクを `Cd` の RGB と `Alpha` の 4 チャンネル
 Unity 向けの `export_packed` は、カタログと重なるので表示をオフにしています。
 そのまま [FBX ROP](https://www.sidefx.com/docs/houdini/nodes/out/filmboxfbx.html) で書き出すと、数 KB の空の FBX ができました。
 FBX ROP の **Export Invisible Objects** の既定が「隠れたヌルノードとして」なので、中身が省かれていたのです。"As Visible Full Nodes" にすると書き出されます。
+
+### Alpha を書くと、ビューポートで透ける
+
+5 章のとおりです。`Alpha` という名前の点属性は、ビューポートがそのまま透明度に使います。
+「属性の名前には意味がある」例です。`Cd`、`N`、`uv`、`Alpha`、`pscale` などは、Houdini が特別扱いします。
 
 ### 曲率は絶対値ではない
 
