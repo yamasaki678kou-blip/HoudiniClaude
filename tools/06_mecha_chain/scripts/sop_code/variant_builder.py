@@ -174,54 +174,113 @@ def axis_rot(axis_index):
 
 
 # ---------------------------------------------------------------------------
-# 歯形（R-01 の gear 層と R-02 で共用。半径 1 正規化ではなく、モジュールで寸法を決める）
+# 歯形（R-01 の gear 層と R-02 で共用。寸法はモジュール基準）
 # テンプレートの約束: 歯の中心がローカル角度 0（+X）。内歯車も同じ。位相は焼かない。
+# 噛み合う相手が分かっている時（R-02）は、相手の歯が通る場所を数値で調べて、そこにかかる分だけ歯を細くする。
+# = 歯車を「相手の歯で削る」のと同じ考え方。歯先の逃がしと、歯数が少ない時の根元の切り下げ（アンダーカット）が自然にできる。
 # ---------------------------------------------------------------------------
+import numpy as np
+
+FLANK = 10  # 歯面 1 本あたりの点の数 - 1
+
+
 def inv(a):
-    return math.tan(a) - a
+    return np.tan(a) - a
 
 
-def gear_outline(z, m_, profile, internal=False, flank=5):
-    rp = z * m_ / 2.0
-    tau = TAU / z
-    rb = rp * math.cos(PA)
+class GearSpec(object):
+    def __init__(self, z, m_, profile, internal=False):
+        self.z, self.m, self.internal = int(z), float(m_), internal
+        self.rp = self.z * self.m / 2.0
+        self.tau = TAU / self.z
+        rb = self.rp * math.cos(PA)
+        tau, rp = self.tau, self.rp
 
-    def hw_ext(rho):
-        if profile == 1:   # インボリュート近似
-            rc = max(rho, rb * 1.0001)
-            return tau / 4.0 + inv(PA) - inv(math.acos(rb / rc))
-        return tau / 4.0 - (rho - rp) * math.tan(PA) / rp   # 台形近似（直線の歯面）
+        def hw_inv(rho):
+            rc = np.maximum(rho, rb * 1.0001)
+            return tau / 4.0 + inv(PA) - inv(np.arccos(rb / rc))
 
-    if internal:
-        r_root, r_tip = rp + 1.25 * m_, rp - m_
-        hw = lambda rho: tau / 2.0 - hw_ext(rho)
+        if profile == 1:
+            ext = hw_inv                      # インボリュート近似
+        else:
+            # 台形近似: インボリュートのピッチ円の点と歯先の点を結ぶ、まっすぐな歯面
+            r_t = rp + self.m
+            k = (hw_inv(r_t) - hw_inv(rp)) / (r_t - rp)
+            h0 = hw_inv(rp)
+            ext = lambda rho: h0 + (np.asarray(rho, dtype=float) - rp) * k
+        if internal:
+            self.r_root, self.r_tip = rp + 1.25 * self.m, rp - self.m
+            self.hw = lambda rho: tau / 2.0 - ext(rho)   # 内歯車の歯 = 外歯車の歯溝の形
+        else:
+            self.r_root, self.r_tip = rp - 1.25 * self.m, rp + self.m
+            self.hw = ext
+
+    def radii(self):
+        return [self.r_root + (self.r_tip - self.r_root) * i / FLANK for i in range(FLANK + 1)]
+
+    def material(self, x, y):
+        """点（この歯車の座標）が歯車の中身かどうか。numpy の配列で一度に調べる"""
+        rho = np.hypot(x, y)
+        d = np.abs((np.arctan2(y, x) + self.tau / 2.0) % self.tau - self.tau / 2.0)
+        w = self.hw(np.clip(rho, min(self.r_root, self.r_tip), max(self.r_root, self.r_tip)))
+        if self.internal:
+            return (rho >= self.r_root) | ((rho >= self.r_tip) & (d <= w))
+        return (rho <= self.r_root) | ((rho <= self.r_tip) & (d <= w))
+
+
+def trim_against(A, B, a, kind, clear=0.04):
+    """A の歯の半幅（半径ごと）を、噛み合っている間ずっと B にかからない大きさまで細くする。
+    kind: 'ext' = 外歯車どうし（B の中心は (a, 0)）、'pr' = A が遊星で B がリング（B の中心は (-a, 0)）、
+          'rp' = A がリングで B が遊星（B の中心は (a, 0)）。
+    噛み合いの式は R-02 の位相計算と同じ（u_A + u_B = 1/2、内歯車は u_r - u_p = 1/2）。"""
+    W = math.pi / 2.0 if kind == "pr" else math.asin(min(1.0, (B.r_tip + B.m) / a)) + A.tau
+    step = A.tau / 40.0
+    tA = np.arange(-W, W + step, step)
+    uA = -np.degrees(tA) * A.z / 360.0
+    if kind == "ext":
+        tB, cx = np.radians(180.0 - (0.5 - uA) * 360.0 / B.z), a
+    elif kind == "pr":
+        tB, cx = np.radians(-(uA + 0.5) * 360.0 / B.z), -a
     else:
-        r_root, r_tip = rp - 1.25 * m_, rp + m_
-        hw = hw_ext
+        tB, cx = np.radians(-(uA - 0.5) * 360.0 / B.z), a
+    c, s = np.cos(-tB)[:, None], np.sin(-tB)[:, None]
+    phis = np.arange(0.0, A.tau / 2.0, A.tau / 400.0)
+    out = {}
+    for rho in A.radii():
+        blocked = np.zeros(len(phis), dtype=bool)
+        for sgn in (1.0, -1.0):
+            ang = sgn * phis[None, :] + tA[:, None]
+            wx, wy = rho * np.cos(ang) - cx, rho * np.sin(ang)
+            blocked |= B.material(wx * c - wy * s, wx * s + wy * c).any(axis=0)
+        idx = np.nonzero(blocked)[0]
+        allowed = float(phis[idx[0]]) if len(idx) else A.tau / 2.0
+        out[rho] = min(float(A.hw(rho)), allowed - clear * A.m / rho)
+    return out
+
+
+def gear_outline(spec, hwmap=None):
+    tau = spec.tau
     lo, hi = 0.03 * tau, 0.47 * tau
-    clampw = lambda w: min(max(w, lo), hi)
+    rs = spec.radii()
+    hw = [min(max(float(hwmap[r]) if hwmap else float(spec.hw(r)), lo), hi) for r in rs]
     pts = []
-    for k in range(z):
+    for k in range(spec.z):
         c = k * tau
-        for i in range(flank + 1):
-            rho = r_root + (r_tip - r_root) * i / flank
-            a = c - clampw(hw(rho))
-            pts.append((rho * math.cos(a), rho * math.sin(a)))
-        for i in range(flank + 1):
-            rho = r_tip + (r_root - r_tip) * i / flank
-            a = c + clampw(hw(rho))
-            pts.append((rho * math.cos(a), rho * math.sin(a)))
+        for r, w in zip(rs, hw):
+            pts.append((r * math.cos(c - w), r * math.sin(c - w)))
+        for r, w in zip(reversed(rs), reversed(hw)):
+            pts.append((r * math.cos(c + w), r * math.sin(c + w)))
         a = c + tau / 2.0
-        pts.append((r_root * math.cos(a), r_root * math.sin(a)))
-    return pts, rp, r_root, r_tip
+        pts.append((spec.r_root * math.cos(a), spec.r_root * math.sin(a)))
+    return pts
 
 
 def rotate2(p, a):
     return (p[0] * math.cos(a) - p[1] * math.sin(a), p[0] * math.sin(a) + p[1] * math.cos(a))
 
 
-def ext_gear(m, z, m_, thick, profile, helix, col, z0=0.0, hand=1):
-    out, rp, rr, rt = gear_outline(z, m_, profile)
+def ext_gear(m, spec, hwmap, thick, helix, col, z0=0.0, hand=1):
+    out, rp, rt = gear_outline(spec, hwmap), spec.rp, spec.r_tip
     layers = 3 if abs(helix) > 1e-6 else 1
     tw = hand * thick * math.tan(math.radians(helix)) / rp if helix else 0.0
     rings = []
@@ -240,9 +299,9 @@ def ext_gear(m, z, m_, thick, profile, helix, col, z0=0.0, hand=1):
     return rp, rt
 
 
-def int_gear(m, z, m_, thick, profile, helix, rim, col, z0=0.0, hand=-1):
-    inner, rp, rr, rt = gear_outline(z, m_, profile, internal=True)
-    r_out = rr + rim
+def int_gear(m, spec, hwmap, thick, helix, rim, col, z0=0.0, hand=-1):
+    inner, rp = gear_outline(spec, hwmap), spec.rp
+    r_out = spec.r_root + rim
     layers = 3 if abs(helix) > 1e-6 else 1
     tw = hand * thick * math.tan(math.radians(helix)) / rp if helix else 0.0
     rin, rout = [], []
@@ -317,31 +376,60 @@ def ramp(vals, s):
     return vals[i] + (vals[i + 1] - vals[i]) * (x - i)
 
 
-def blade(m, n_blades, rho0, rho1, widths, tw0, tw1, sweep, lean, section, z_c, col, steps=8):
-    """+X 方向に伸びる 1 枚。翼弦が回転面から tw 度ねじれる。隣の羽根とぶつからないよう弦を自動で細くする"""
-    rings = []
+def sec_yz(section, c, tw, dy, dz):
+    """断面の各点の (接線方向 y, 軸方向 z)。翼弦は回転面から tw ねじれ、弦の 30% の位置を中心に回す"""
+    return [(dy + (x - 0.3) * c * math.cos(tw) - y * c * math.sin(tw),
+             dz + (x - 0.3) * c * math.sin(tw) + y * c * math.cos(tw)) for x, y in section]
+
+
+def fit_chord(section, rho, c_want, tw, dy, n_blades, hub_r):
+    """弦の長さを、次の 2 つを満たすまで自動で短くする（二分探索）
+      1) その半径での羽根の角度の幅が、羽根の間隔（360° / 枚数）の 85% 以下 = 隣の羽根に当たらない
+      2) ハブの中にある断面は、ハブの円柱からはみ出さない = 根元がハブに埋まる"""
+    def ok(c):
+        ys = [p[0] for p in sec_yz(section, c, tw, dy, 0.0)]
+        if math.atan2(max(ys), rho) - math.atan2(min(ys), rho) > 0.85 * TAU / n_blades:
+            return False
+        if rho < hub_r and max(abs(v) for v in ys) > math.sqrt(max((0.97 * hub_r) ** 2 - rho * rho, 0.0)):
+            return False
+        return True
+    if ok(c_want):
+        return c_want
+    lo, hi = 0.0, c_want
+    for _ in range(30):
+        mid = (lo + hi) / 2.0
+        if ok(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
+def blade_plan(n_blades, rho0, rho1, widths, tw0, tw1, sweep, lean, section, hub_r, steps=8):
+    """断面ごとの (半径, 弦, ねじれ, 後退で横にずれる量, 前傾で軸方向にずれる量)"""
+    plan = []
     for i in range(steps + 1):
         s = i / float(steps)
         rho = rho0 + (rho1 - rho0) * s
         tw = math.radians(tw0 + (tw1 - tw0) * s)
-        c = ramp(widths, s)
-        limit = 0.85 * TAU * rho / n_blades / max(abs(math.cos(tw)), 0.1)
-        c = min(c, limit)
-        chord = (0.0, math.cos(tw), math.sin(tw))
-        thick = (0.0, -math.sin(tw), math.cos(tw))
         dy = (rho - rho0) * math.tan(math.radians(sweep))
         dz = (rho - rho0) * math.tan(math.radians(lean))
-        ring = []
-        for x, y in section:
-            u, v = (x - 0.3) * c, y * c
-            ring.append((rho, dy + u * chord[1] + v * thick[1], z_c + dz + u * chord[2] + v * thick[2]))
-        rings.append(ring)
+        plan.append((rho, fit_chord(section, rho, ramp(widths, s), tw, dy, n_blades, hub_r), tw, dy, dz))
+    return plan
+
+
+def hub_fit(plan, section, hub_h):
+    """根元の断面がハブの高さに収まるよう、ハブの高さと羽根の中心の高さを決める"""
+    rho, c, tw, dy, dz = plan[0]
+    zs = [p[1] for p in sec_yz(section, c, tw, dy, dz)]
+    h = max(hub_h, (max(zs) - min(zs)) + 0.3)
+    return h, (h - (max(zs) + min(zs))) / 2.0
+
+
+def blade(m, plan, section, z_c, col):
+    """+X 方向に伸びる羽根 1 枚"""
+    rings = [[(rho, y, z_c + z) for y, z in sec_yz(section, c, tw, dy, dz)] for rho, c, tw, dy, dz in plan]
     strip(m, rings, col, cap0=True, cap1=True)
-
-
-def blade_root_fit(n, widths, tw0, hub_r):
-    c0 = min(widths[0], 0.85 * TAU * hub_r * 0.7 / n / max(abs(math.cos(math.radians(tw0))), 0.1))
-    return c0 * abs(math.sin(math.radians(tw0))) + 0.35
 
 
 # ---------------------------------------------------------------------------
@@ -381,15 +469,17 @@ def v_layer(gid, g):
     elif form == "gear":
         z = int(g.get("teeth", 24))
         m_ = 2.0 * R / (z + 2)
-        ext_gear(r, z, m_, th, 1, 0.0, (0.82, 0.64, 0.25), z0=-th / 2)
+        ext_gear(r, GearSpec(z, m_, 1), None, th, 0.0, (0.82, 0.64, 0.25), z0=-th / 2)
     elif form == "blades":
         n = int(g.get("blade_count", 4))
         tr, tt = g.get("twist_root", 40.0), g.get("twist_tip", 15.0)
         sec = curve_section(int(g.get("curve", -1))) if int(g.get("curve", -1)) >= 0 else None
-        hub_h = blade_root_fit(n, [1.4], tr, 1.0)
+        sec = sec or airfoil("sym")
+        plan = blade_plan(n, 0.7, R, [1.4, 0.6], tr, tt, 0.0, 0.0, sec, 1.0)
+        hub_h, z_c = hub_fit(plan, sec, 0.6)
         cyl(r, 1.0, -hub_h / 2, hub_h / 2, LIGHT)
         one = Mesh()
-        blade(one, n, 0.7, R, [1.4, 0.6], tr, tt, 0.0, 0.0, sec or airfoil("sym"), 0.0, (0.92, 0.92, 0.95))
+        blade(one, plan, sec, -hub_h / 2 + z_c, (0.92, 0.92, 0.95))
         # 羽根を n 枚に並べて焼く（層は剛体 1 個のまま）
         for k in range(n):
             a = TAU * k / n
@@ -436,38 +526,36 @@ def user_mesh(k):
 def v_turbine(gid, g):
     n = int(g["blade_count"])
     widths = [g.get("width%d" % i, 0.5) for i in range(int(g.get("nwidth", 2)))]
-    hub_r, hub_h = g["hub_r"], g["hub_h"]
+    hub_r = g["hub_r"]
     tr, tt = g["twist_root"], g["twist_tip"]
     hub_form = gid.split("_")[1]
     sec_name = gid.split("_")[9]
-    hub_h = max(hub_h, blade_root_fit(n, widths, tr, hub_r))
-    h, r, b = Mesh(), Mesh(), Mesh()
-    # housing: 取り付けの襟（+ シュラウドと支柱）
-    cyl(h, hub_r * 0.75, -0.7, -0.05, STEEL)
-    tip = hub_r + g["blade_len"]
-    if int(g["shroud"]):
-        ri = tip + g["shroud_gap"]
-        annulus(h, ri, ri + 0.35, hub_h / 2 - 0.9, hub_h / 2 + 0.9, STEEL, n=64)
-        for k in range(3):
-            a = TAU * (k + 0.5) / 3
-            seg_box(h, (hub_r * 0.7 * math.cos(a), hub_r * 0.7 * math.sin(a), -0.4),
-                    (ri * math.cos(a), ri * math.sin(a), hub_h / 2 - 0.9), 0.3, 0.3, STEEL)
-    # rotor: ハブ
-    hc = (0.86, 0.86, 0.9)
-    if hub_form == "cyl":
-        cyl(r, hub_r, 0.0, hub_h, hc)
-    elif hub_form == "sphere":
-        cyl(r, hub_r, 0.0, hub_h, hc)
-        cone(r, hub_r, hub_r * 0.35, hub_h, hub_h + hub_r * 0.7, hc)
-    else:
-        cyl(r, hub_r, 0.0, hub_h, hc)
-        cone(r, hub_r, 0.06, hub_h, hub_h + 1.6 * hub_r, hc)
-    # blade: 1 枚（detail_pieces が blade_count 枚に並べる。ピッチの時間変化も付けられる）
     if sec_name.startswith("curve"):
         sec = curve_section(int(g.get("curve", 0))) or airfoil("sym")
     else:
         sec = airfoil(sec_name)
-    blade(b, n, 0.7 * hub_r, tip, widths, tr, tt, g["sweep"], g["lean"], sec, hub_h / 2.0, (0.93, 0.56, 0.16))
+    tip = hub_r + g["blade_len"]
+    plan = blade_plan(n, 0.7 * hub_r, tip, widths, tr, tt, g["sweep"], g["lean"], sec, hub_r)
+    hub_h, z_c = hub_fit(plan, sec, g["hub_h"])
+    h, r, b = Mesh(), Mesh(), Mesh()
+    # housing: 取り付けの襟（+ シュラウドと支柱）。回らない側
+    cyl(h, hub_r * 0.75, -0.7, -0.05, STEEL)
+    if int(g["shroud"]):
+        ri = tip + g["shroud_gap"]
+        annulus(h, ri, ri + 0.35, z_c - 0.9, z_c + 0.9, STEEL, n=64)
+        for k in range(3):
+            a = TAU * (k + 0.5) / 3
+            seg_box(h, (hub_r * 0.7 * math.cos(a), hub_r * 0.7 * math.sin(a), -0.4),
+                    (ri * math.cos(a), ri * math.sin(a), z_c - 0.9), 0.3, 0.3, STEEL)
+    # rotor: ハブ（羽根の根元が埋まる高さに自動で伸ばす）
+    hc = (0.86, 0.86, 0.9)
+    cyl(r, hub_r, 0.0, hub_h, hc)
+    if hub_form == "sphere":
+        cone(r, hub_r, hub_r * 0.35, hub_h, hub_h + hub_r * 0.7, hc)
+    elif hub_form == "spinner":
+        cone(r, hub_r, 0.06, hub_h, hub_h + 1.6 * hub_r, hc)
+    # blade: 1 枚（detail_pieces が blade_count 枚に並べる。ピッチの時間変化も付けられる）
+    blade(b, plan, sec, z_c, (0.93, 0.56, 0.16))
     return {"housing": h.to_geo(), "rotor": r.to_geo(), "blade": b.to_geo()}
 
 
@@ -626,12 +714,22 @@ def v_gear(gid, g):
     kind = gid.split("_")[0]
     z, m_, th = int(g["teeth"]), g["module"], g["thick"]
     prof, hel, hand = int(g["profile"]), g["helix"], int(g.get("hand", 1))
+    me, mi = int(g.get("mate_ext", 0)), int(g.get("mate_int", 0))
     m = Mesh()
     if kind == "pgring":
-        int_gear(m, z, m_, th, prof, hel, 2.4 * m_, (0.55, 0.58, 0.64), hand=-1)
+        A = GearSpec(z, m_, prof, internal=True)
+        hw = trim_against(A, GearSpec(me, m_, prof), m_ * (z - me) / 2.0, "rp") if me else None
+        int_gear(m, A, hw, th, hel, 2.4 * m_, (0.55, 0.58, 0.64), hand=-1)
     else:
+        A = GearSpec(z, m_, prof)
+        hw = None
+        if me:
+            hw = trim_against(A, GearSpec(me, m_, prof), m_ * (z + me) / 2.0, "ext")
+        if mi:
+            h2 = trim_against(A, GearSpec(mi, m_, prof, internal=True), m_ * (mi - z) / 2.0, "pr")
+            hw = dict((r, min(hw[r], h2[r])) for r in h2) if hw else h2
         col = (0.85, 0.66, 0.22) if kind == "pgsun" else (0.75, 0.55, 0.30)
-        ext_gear(m, z, m_, th, prof, hel, col, hand=hand)
+        ext_gear(m, A, hw, th, hel, col, hand=hand)
         cyl(m, 0.35 if kind == "pgplanet" else 0.5, -0.6 if kind == "pgsun" else 0.0, th + 0.12, LIGHT, n=12)
     return {"rotor": m.to_geo()}
 

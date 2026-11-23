@@ -24,8 +24,9 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `mecha_chain_sample.hiplc` | 見本のシーン。レシピ02、プリセット 20 本、検証チェーン、練習用 |
 | `otls/mecha_chain.hdalc` | HDA 本体（`hclaude::mecha_chain::1.0`、ラベル「汎用メカチェーン」） |
 | `scripts/build_sample.py` | HDA と見本シーンと画像を、ゼロから作り直すスクリプト |
-| `verify_log.txt` | 自動検証の結果（64 項目、すべて PASS） |
-| `export/` | レシピ02 を VAT（剛体モード）で書き出したもの（FBX + EXR + Unity 用マテリアル） |
+| `scripts/sop_code/` | HDA の中のノードのコード（パーサ、ソルバ、形のバリアント生成など）。ここを直して作り直します |
+| `verify_log.txt` | 自動検証の結果（103 項目、すべて PASS） |
+| `export/` | レシピ02 と回転系の見本 C1 を VAT（剛体モード）で書き出したもの（FBX + EXR + Unity 用マテリアル） |
 | `images/` | この README の画像と GIF |
 | `REPORT.md` | しくみの解説（技術記事のたたき台） |
 
@@ -33,7 +34,7 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 
 1. `mecha_chain_sample.hiplc` を Houdini で開きます。
 2. 再生ボタンを押します（1〜96 フレーム、24 fps）。
-3. 原点にあるのが **レシピ02**（合格ラインのメカ）です。右の奥にはプリセット 20 本が並んでいます。
+3. 原点にあるのが **レシピ02**（合格ラインのメカ）です。右の奥にはプリセット 20 本、左の奥には回転系の見本 10 本が並んでいます。
 
 ![プリセット 20 本](images/gallery.png)
 
@@ -45,6 +46,8 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `playground` | 触って壊して学ぶ用。骨組み表示つき。ネットワークに付箋で「やってみること」を書いてあります |
 | `test_bent_single` / `test_bent_double` | 回転の掛け算の順番を確かめる検証チェーン |
 | `preset01`〜`preset20` | プリセットレシピ集の 20 本 |
+| `rotaryR1`〜`rotaryR5`、`rotaryC1`〜`rotaryC5` | 回転モーター系 5 種の見本と、組み合わせの見本（下の「回転モーター系 5 種」） |
+| `vat_recipe02` / `vat_rotary` | VAT 書き出し用（レシピ02 と、回転系の見本 C1） |
 
 ## 自分のシーンで使う
 
@@ -126,6 +129,46 @@ base > motor_rot(axis=1, speed=0.2) > splitter(a=3, b=50) [ motor_osc(b=35) > gr
 - `splitter` はそのチェーンの終わりです。`]` の後ろに `>` で続けることはできません（続けたい時は枝の中に書きます）。
 - 枝の中にまた `splitter` を置けます（四脚のプリセット09 がこの形）。
 
+## 回転モーター系 5 種（R-01〜R-05）
+
+![回転系の見本 10 本](images/gallery_rotary.png)
+
+回転するパーツを 1 個書くだけで、中の部品（層、歯車、リング、ロッド、羽根など）を自動で組み立てて動かします。
+中の部品を自分で触る必要はありません。プリセットメニューの `R1`〜`R5`（5 種それぞれ）と `C1`〜`C5`（組み合わせ）から試せます。
+
+![遊星ギア（R-02）](images/rotary_R2.gif)
+
+| パーツ | 何をするか | よく使うキー（`名前=値`） |
+|---|---|---|
+| `coax`（R-01 同軸スタック） | 同じ軸の上に回る層を重ね、層ごとに別の速さで回す | `layers` 層の数 / `ratio=[1,-0.8,0.5]` 層ごとの速さの倍率 / `form=[disc,blades,gear,ring,cage]` 層ごとの形 / `layer_gap` 層の間隔 / `radius_step` 上の層ほど小さく / `stack_mode=cumulative`（親に運ばれる）か `independent`（親に運ばれない） |
+| `planetary`（R-02 遊星ギア） | 太陽 → 遊星 → リングで減速して、キャリアの回転を出す | `sun_teeth` 太陽の歯数 / `planet_count` 遊星の数 / `planet_teeth`（0 で自動）/ `module` 歯の大きさ / `output=carrier,ring,sun` / `tooth_profile` 0 台形・1 インボリュート / `helical_angle` はすば / `housing_window` 窓の数 / `carrier_form=tri,cross,disc` |
+| `gimbal`（R-03 ジンバル） | 3 つの入れ子のリング。先の向きを自由に変える | `mode=follow`（それぞれ揺れる）/ `stabilize`（先の向きを保つ）/ `track`（目標を向く）/ `axis_order=zxy` 軸の順 / `axis_enable=[1,1,1]` / `angle_list=[30,25,20]` 揺れ幅 / `target=[x,y,z]` か `target=番号` / `frame_form=ring,square,u` / `payload_form=socket,plate,sphere` |
+| `crank`（R-04 クランク） | 回転を往復に変える。先につないだパーツが前後する | `eccentric` 偏心（ストロークの半分）/ `rod_len` ロッドの長さ / `guide_offset` ガイドのずれ / `output_axis` 2（Z）か 1（Y）/ `pin_count` ピンの数 / `pin_phase_list=[0,90]` / `wheel_form=spoke,disc` / `counterweight` / `d=1`（上流の回転で回す） |
+| `turbine`（R-05 タービン） | ハブと羽根。プロペラ、ファン | `blade_count` 枚数 / `blade_len` 長さ / `width=[根元,先]` 幅 / `twist_root` `twist_tip` ねじれ / `sweep` 後退 / `lean` 前傾 / `section_form=sym,flat,camber,curve` 断面 / `pitch_anim` 羽根の角度の揺れ / `hub_form=spinner,cyl,sphere` / `shroud=1` 外周リング |
+
+```
+base > planetary(sun_teeth=10, planet_count=4, speed=2) > coax(layers=5, form=[cage,disc], layer_gap=0.45, stack_mode=independent) > cap
+```
+
+- **リストと名前**: `ratio=[1,-0.8,0.5]` のように `[ ]` で並べ、`form=disc` のように名前をそのまま書けます（レシピ文法 v1.2）。
+- **大きさの単位**: 形の寸法（`eccentric`、`rod_len`、`module`、`blade_len` など）は **太さ `rad` を 1 とした単位** です。`rad=0.3` を付けるとパーツ全体が倍の大きさになります。`len` と `layer_gap` だけは生の長さです。
+- **遊星の歯数**: 遊星を等間隔に置けない歯数のときは、`planet_teeth` を少しだけ自動で変えて、黄色い警告で知らせます。歯は噛み合う相手に合わせて少し削ってあるので、めり込みません。
+- **ジンバル**: `stabilize` は、真ん中のリングが 80°〜90° に近づくと（ジンバルロック）補正を弱めて、ふつうの揺れに戻します。
+- **クランク**: 先につないだパーツを前後させるのは **ピン 0**（`pin_phase_list` の最初）です。2 本目からのピンは、向きを変えたガイドで見た目だけ往復します（2 本なら向かい合わせ）。
+- **タービン**: 羽根の幅は、隣の羽根に当たらない幅まで自動で細くなり、ハブは羽根の根元が埋まる高さまで伸びます。
+
+### 形の素材を入れる（2 番目の入力）
+
+HDA の 2 番目の入力に、断面カーブ・差し替えメッシュ・目標点をまとめて入れられます。
+
+| 入れ方 | 使い道 |
+|---|---|
+| グループ `sections`（または開いたカーブ） | 羽根の断面 `turbine(section_form=curve, curve=0)`、遊星ギアの外形 `planetary(housing_curve=0)` |
+| グループ `meshes`（または閉じた面。つながった塊ごとに 1 個） | 層の形の差し替え `coax(form=mesh, mesh=0)` |
+| ポイントグループ `targets`（または面に属さない点） | ジンバルの目標 `gimbal(mode=track, target=0)` |
+
+番号は入れた順に 0, 1, 2… と数えます。グループが無いときは、形（開いているか・閉じているか・点だけか）で見分けます。
+
 ## 触って壊して学ぶ
 
 `playground` の中の `mecha_chain1` を選んで、レシピを書き換えてみてください。
@@ -148,8 +191,9 @@ base > motor_rot(axis=1, speed=0.2) > splitter(a=3, b=50) [ motor_osc(b=35) > gr
 | `export/geo/mecha_recipe02_mesh.fbx` | 1 フレーム目の形のメッシュ |
 | `export/tex/mecha_recipe02_pos.exr` / `_rot.exr` / `_col.exr` | 各パーツの位置・回転・色（96 フレーム） |
 | `export/unity/mecha_recipe02_mat.mat` | Unity 用のマテリアル（テクスチャ欄は空なので自分で入れます） |
+| `export/*/mecha_C1_*` | 回転系の見本 C1（遊星ギア → 同軸スタック）。同じ形式 |
 
-書き出し直す時は、`/out` の `vat_recipe02` を選んで **Render** を押します（SideFX Labs が必要）。
+書き出し直す時は、`/out` の `vat_recipe02` か `vat_rotary` を選んで **Render** を押します（SideFX Labs が必要）。
 Unity 側の手順は [01 Mech Transform の README「Unity に持っていく」](../01_mech_transform/README.md) と同じです。
 
 しくみ: Labs の VAT は「書き出しの最初のフレームでは全パーツが回転なし」が前提です。
@@ -166,6 +210,10 @@ Unity 側の手順は [01 Mech Transform の README「Unity に持っていく�
 | 回っているのに形が動かない | 既定の `axis=2` はチェーンの伸びる向きなので、その場でねじれるだけです。振りたい時は `axis=0` か `axis=1` に |
 | 長くしたのにモーターが伸びない | 仕様どおりです。モーターや関節は太さ `rad` だけで大きさが決まり、`len` の分は細い軸でつながります |
 | 枝の数が違うと言われる | `splitter(a=3)` なら `[ 枝 | 枝 | 枝 ]` の 3 本にします |
+| 「形の種類が多すぎます」 | 形のバリアント（歯数や羽根の枚数などの組み合わせ）は 1 本のチェーンで 32 種類までです。同じ形にそろえると 1 種類にまとまります |
+| 「パーツは 256 個までです」 | 回転系は中で部品に分かれるので、分解後の数で数えます。メッセージの内訳で、どのパーツが何個使ったか分かります |
+| 遊星の歯数が勝手に変わった | 遊星を等間隔に置ける歯数に寄せています（警告に元の数と新しい数が出ます） |
+| ジンバルの先が少しずれる | 真ん中のリングが 80° を超えるとジンバルロックを避けるため補正を弱めます。`axis_order` を変えると避けられることがあります |
 
 ## 作り直す（開発する人向け）
 
@@ -175,11 +223,11 @@ Unity 側の手順は [01 Mech Transform の README「Unity に持っていく�
 "C:/Program Files/Side Effects Software/Houdini 21.0.700/bin/hython.exe" scripts/build_sample.py
 ```
 
-HDA、見本シーン、`verify_log.txt` を作り直します。後ろに `render` を付けると `images/` も描き直します（画面なしで動きます）。
+HDA、見本シーン、`verify_log.txt` を作り直します。後ろに `render` を付けると `images/` も描き直し、`vat` を付けると `export/` の VAT も書き出し直します（どれも画面なしで動きます）。
 
 ## まだできないこと（次の Phase）
 
-- モーターの「外側は止まって軸だけ回る」表現（今は外側ごと回ります。Phase2 でテンプレを housing / rotor に分けます）
+- Phase1 の `motor_rot` などは外側ごと回ります（回転系 5 種は「回らない側」と「回る側」に分かれています）
 - ケーブルやピストンロッドなど、パーツの間をつなぐ造形（Phase2）
-- 出力: VAT（剛体モード）は書き出し済み（Unity での確認はこれから）。静止メッシュ → アニメ付き FBX の順に試す予定です
+- 出力: VAT（剛体モード）はレシピ02 と回転系の見本 C1 を書き出し済み（Unity での確認はこれから）。静止メッシュ → アニメ付き FBX の順に試す予定です
 - 背景用途ライン（BG-01〜10）は、この Phase1 が通ったので着手できる状態です

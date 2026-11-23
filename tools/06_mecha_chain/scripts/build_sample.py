@@ -28,6 +28,7 @@ HDA_TYPE = "hclaude::mecha_chain::1.0"
 IMG_DIR = TOOL_DIR + "/images"
 LOG_PATH = TOOL_DIR + "/verify_log.txt"
 FRAME_END = 96
+TAU = 2.0 * math.pi
 
 # ----------------------------------------------------------------------------
 # プリセットレシピ 20 本（レシピ集の文字列そのまま）
@@ -95,13 +96,13 @@ PRESETS = [
 
 # 回転モーター系 5 種（仕様 v0.5）の見本と、仕様 §6 の組み合わせ例
 ROTARY_PRESETS = [
-    ("R1", "R-01 同軸スタック（層ごとに形を変える）",
+    ("R1", "R-01 同軸スタック（層ごとの形）",
      "base > coax(layers=4, ratio=[1,-0.8,0.5,-1.4], form=[disc,blades,gear,ring]) > link(len=0.6) > cap"),
     ("R2", "R-02 遊星ギア（キャリア出力）",
      "base > planetary(sun_teeth=12, planet_count=3, speed=1.2) > link(len=0.6) > cap"),
     ("R3", "R-03 ジンバル（stabilize）",
      "base > motor_osc(axis=0, b=35, speed=0.35) > hinge(axis=1, b=30, c=0.45) > link(len=0.5) > "
-     "gimbal(mode=stabilize, payload_form=socket)"),
+     "gimbal(mode=stabilize, payload_form=socket, rad=0.25)"),
     ("R4", "R-04 クランク（ガイドずらし）",
      "base > crank(eccentric=0.8, rod_len=3, guide_offset=0.6, speed=0.6) > link(len=0.5) > cap"),
     ("R5", "R-05 タービン（シュラウド付き）",
@@ -110,7 +111,7 @@ ROTARY_PRESETS = [
      "base > planetary(sun_teeth=10, planet_count=4, speed=2) > coax(layers=5, form=[cage,disc], layer_gap=0.45, "
      "stack_mode=independent) > cap"),
     ("C2", "R-03 → R-05 向きを保つファン",
-     "base > motor_osc(axis=0, b=35, speed=0.3) > link(len=0.8) > gimbal(mode=stabilize, angle_list=[0,0,0]) > "
+     "base > motor_osc(axis=0, b=35, speed=0.3) > link(len=0.8) > gimbal(mode=stabilize, angle_list=[0,0,0], rad=0.25) > "
      "turbine(blade_count=3, speed=2, hub_form=cyl, blade_len=2)"),
     ("C3", "R-04 → piston クランク駆動",
      "base > crank(eccentric=1, rod_len=3.5, pin_count=2, pin_phase_list=[0,180], speed=0.7) > piston(a=0.3) > cap"),
@@ -346,6 +347,19 @@ HDA_HELP = '''= 汎用メカチェーン（Mecha Chain） =
     # [Python SOP|Node:sop/python] がレシピを読んで「パーツ 1 個 = 点 1 個」にする
     # [Attribute Wrangle|Node:sop/attribwrangle]（Detail）が親から順に位置と向きを計算する
     # [Copy to Points|Node:sop/copytopoints] が `piece` 属性で形を差し替えて置く
+
+回転モーター系 5 種:
+    `coax`（同軸スタック）、`planetary`（遊星ギア）、`gimbal`（ジンバル）、`crank`（クランク）、`turbine`（タービン）を
+    1 個書くだけで、中の部品を自動で組み立てて動かします。`ratio=[1,-0.8,0.5]` のようなリストや `form=disc` のような名前も書けます。
+    プリセットの R1〜R5、C1〜C5 から試せます。
+
+@inputs
+
+ベースポイント（任意）:
+    最初の点の P と orient に、チェーンの根を置きます。
+形の素材（任意）:
+    グループ `sections`（断面カーブ）、`meshes`（差し替えメッシュ）、`targets`（ジンバルの目標点）。
+    グループが無い時は、開いたカーブ = 断面、閉じた面 = メッシュ、面に属さない点 = 目標点として読みます。
 
 @parameters
 
@@ -880,6 +894,52 @@ def poly_dist(pt, poly):
     return best
 
 
+def seg_dist(pt, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    t = max(0.0, min(1.0, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / ((dx * dx + dy * dy) or 1e-12)))
+    return math.hypot(pt[0] - a[0] - t * dx, pt[1] - a[1] - t * dy)
+
+
+def vec_angle(a, b):
+    """2 つのベクトルのなす角（度）。acos は 1 の近くで誤差が大きいので atan2 で求める"""
+    cr = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+    return math.degrees(math.atan2(vlen(cr), sum(x * y for x, y in zip(a, b))))
+
+
+def rot2(pts, deg, cx=0.0, cy=0.0):
+    a = math.radians(deg)
+    c_, s_ = math.cos(a), math.sin(a)
+    return [(cx + x * c_ - y * s_, cy + x * s_ + y * c_) for x, y in pts]
+
+
+def star(outline):
+    """中心から見て角度順に並んだ輪郭（歯車は中心から見て 1 価）を、半径の検索表にする"""
+    pts = sorted(outline, key=lambda q: math.atan2(q[1], q[0]))
+    return [math.atan2(q[1], q[0]) for q in pts], pts
+
+
+def star_pen(points, st, internal):
+    """点が歯車の中身に入り込んでいる深さの最大（外歯車: 輪郭の内側、内歯車: 輪郭の外側が中身）"""
+    import bisect
+    angs, pts = st
+    n = len(pts)
+    worst = 0.0
+    for x, y in points:
+        a = math.atan2(y, x)
+        i = bisect.bisect_left(angs, a) % n
+        p0, p1 = pts[i - 1], pts[i]
+        # 光線（中心 → 点）と輪郭の辺 p0-p1 の交点までの距離 = その向きでの輪郭の半径
+        ux, uy = math.cos(a), math.sin(a)
+        ex, ey = p1[0] - p0[0], p1[1] - p0[1]
+        den = ux * ey - uy * ex
+        rb = (p0[0] * ey - p0[1] * ex) / den if abs(den) > 1e-12 else math.hypot(*p0)
+        rho = math.hypot(x, y)
+        if (rho < rb) != internal:
+            loc = [pts[(i + k) % n] for k in range(-8, 9)]
+            worst = max(worst, min(seg_dist((x, y), loc[k], loc[k + 1]) for k in range(len(loc) - 1)))
+    return worst
+
+
 def gear_outline_of(vb, gid_prefix, r_lo, r_hi):
     """バリアントの歯車（パック済み）から、z = 0 の歯の輪郭を角度順に取り出す"""
     for pr in vb.prims():
@@ -1015,6 +1075,7 @@ def verify_rotary(c, m):
         sun_o = gear_outline_of(vb, "pgsun", rp(Sz) - 1.25 * mm, rp(Sz) + mm)
         pl_o = gear_outline_of(vb, "pgplanet", rp(Pz) - 1.25 * mm, rp(Pz) + mm)
         ring_o = gear_outline_of(vb, "pgring", rp(Rz) - mm, rp(Rz) + 1.25 * mm)
+        sun_s, pl_s, ring_s = star(sun_o), star(pl_o), star(ring_o)
         for f in (1, 17, 41, 73):
             st = chain_state(m, f)
             qb, pb_ = st[ib]["fo"], st[ib]["fp"]
@@ -1030,22 +1091,19 @@ def verify_rotary(c, m):
                 ur = (gam - tr) * Rz / 360.0
                 up2 = (gam - tp) * Pz / 360.0
                 ok_mesh = ok_mesh and frac_dist(us + up - 0.5) < 1e-3 and frac_dist(ur - up2 - 0.5) < 1e-3
-                # 形でも確かめる: 遊星の歯の輪郭が、太陽とリングにめり込んでいないか（めり込み量 / モジュール）
+                # 形でも確かめる: 歯の輪郭どうしが重ならないか（両方向。めり込み量 / モジュール）
                 cx, cy = rel[0] / rad, rel[1] / rad
                 for wrong in (0.0, 180.0 / Pz):
-                    a = math.radians(tp + wrong)
-                    sa = math.radians(ts)
-                    ra = math.radians(tr)
+                    tpw = tp + wrong
                     pen = 0.0
-                    for x, y in pl_o[::2]:
-                        px = cx + x * math.cos(a) - y * math.sin(a)
-                        py = cy + x * math.sin(a) + y * math.cos(a)
-                        qx, qy = px * math.cos(-sa) - py * math.sin(-sa), px * math.sin(-sa) + py * math.cos(-sa)
-                        if poly_inside((qx, qy), sun_o):
-                            pen = max(pen, poly_dist((qx, qy), sun_o))
-                        qx, qy = px * math.cos(-ra) - py * math.sin(-ra), px * math.sin(-ra) + py * math.cos(-ra)
-                        if not poly_inside((qx, qy), ring_o):
-                            pen = max(pen, poly_dist((qx, qy), ring_o))
+                    pl_b = rot2(pl_o, tpw, cx, cy)
+                    pen = max(pen, star_pen(rot2(pl_b, -ts), sun_s, False))        # 遊星の歯 → 太陽の中
+                    pen = max(pen, star_pen(rot2(pl_b, -tr), ring_s, True))        # 遊星の歯 → リングの中
+                    near_s = [q for q in rot2(sun_o, ts) if math.hypot(q[0] - cx, q[1] - cy) < rp(Pz) + 1.2 * mm]
+                    near_r = [q for q in rot2(ring_o, tr) if math.hypot(q[0] - cx, q[1] - cy) < rp(Pz) + 1.2 * mm]
+                    back = lambda pts_: rot2([(q[0] - cx, q[1] - cy) for q in pts_], -tpw)
+                    pen = max(pen, star_pen(back(near_s), pl_s, False))                # 太陽の歯 → 遊星の中
+                    pen = max(pen, star_pen(back(near_r), pl_s, False))                # リングの歯 → 遊星の中
                     if wrong == 0.0:
                         worst_pen = max(worst_pen, pen / mm)
                     else:
@@ -1054,7 +1112,7 @@ def verify_rotary(c, m):
     c.check(ok_geo, "R-02: 遊星は全部で 1 つの geo_id（等間隔配置の条件が満たされている証拠）", " / ".join(vb_lines))
     c.check(ok_ratio, "R-02: 減速比どおりに回る（キャリア = 太陽 × S/(R+S)、リング出力は −S/R）")
     c.check(ok_mesh, "R-02: 噛み合い位相 — どの遊星も、太陽とリングに対して歯と歯溝が向き合う（4 フレームで確認）")
-    c.check(worst_pen < 0.1 and wrong_pen > 0.3,
+    c.check(worst_pen < 0.02 and wrong_pen > 0.3,
             "R-02: 歯がめり込まない（輪郭どうしの重なりで確認）",
             "めり込み最大 %.3f × モジュール（わざと半ピッチずらすと %.2f × モジュール）" % (worst_pen, wrong_pen))
     load("base > planetary(sun_teeth=12, planet_count=3, planet_teeth=13) > cap")
@@ -1102,7 +1160,7 @@ def verify_rotary(c, m):
         pay = frames[-1] + 1
         d = unit3(vsub((3.0, 2.0, 6.0), st[frames[0]]["fp"]))
         fwd = qrot(st[pay]["fo"], (0.0, 0.0, 1.0))
-        worst_t = max(worst_t, math.degrees(math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(d, fwd)))))))
+        worst_t = max(worst_t, vec_angle(d, fwd))
     tgt = m.parent().createNode("add", "track_target")
     tgt.parm("points").set(1)
     tgt.parmTuple("pt0").set((-2.0, 1.5, 5.0))
@@ -1112,7 +1170,7 @@ def verify_rotary(c, m):
     frames = [i for i, p in enumerate(st) if p["type"] == "gimbal_frame"]
     d = unit3(vsub((-2.0, 1.5, 5.0), st[frames[0]]["fp"]))
     fwd = qrot(st[frames[-1] + 1]["fo"], (0.0, 0.0, 1.0))
-    a_in = math.degrees(math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(d, fwd))))))
+    a_in = vec_angle(d, fwd)
     m.setInput(1, None)
     tgt.destroy()
     c.check(worst_t < 0.01 and a_in < 0.01, "R-03 track: ペイロードの +Z が目標点を向く（座標指定 / 第2入力の点）",
@@ -1154,20 +1212,28 @@ def verify_rotary(c, m):
 
     # ---- R-05 タービン
     ok_b, lines = True, []
-    for n, tr, tt in ((3, 20, 10), (5, 45, 15), (8, 70, 30), (12, 10, 5), (12, 60, 40)):
-        load("base > turbine(blade_count=%d, twist_root=%g, twist_tip=%g, hub_form=cyl) > cap" % (n, tr, tt))
+    for n, tr, tt, sw in ((3, 20, 10, 0), (5, 45, 15, 0), (7, 35, 15, 25), (8, 70, 30, 0), (12, 10, 5, 0),
+                          (12, 60, 40, 0)):
+        load("base > turbine(blade_count=%d, twist_root=%g, twist_tip=%g, sweep=%g, lean=%g, hub_form=cyl) > cap"
+             % (n, tr, tt, sw, sw / 2.0))
         vb = m.node("variant_builder").geometry()
         bl = [p for p in vb.prims() if p.attribValue("piece").endswith("_blade")][0].getEmbeddedGeometry()
         hub = [p for p in vb.prims() if p.attribValue("piece").startswith("turbine") and
                p.attribValue("piece").endswith("_rotor")][0].getEmbeddedGeometry()
         pts = [p.position() for p in bl.points()]
-        half = max(abs(math.atan2(p[1], p[0])) for p in pts)
+        # 半径ごと（断面ごと）に、羽根が占める角度の幅を測る。隣の羽根まで 360°/枚数 なので、それより狭ければ当たらない
+        rings = {}
+        for q in pts:
+            rings.setdefault(round(q[0], 6), []).append(math.atan2(q[1], q[0]))
+        span = max(max(v) - min(v) for v in rings.values())
         xmin = min(p[0] for p in pts)
         root = [p for p in pts if abs(p[0] - xmin) < 1e-6]
         top = hub.boundingBox().maxvec()[2]
         embedded = all(math.hypot(p[0], p[1]) <= 1.0 + 1e-6 and -1e-6 <= p[2] <= top + 1e-6 for p in root)
-        ok_b = ok_b and half < math.pi / n and embedded
-        lines.append("%d 枚 %g→%g°: 角度の幅 %.0f%%%s" % (n, tr, tt, 100 * half / (math.pi / n), "" if embedded else " 根元が出る"))
+        ok_b = ok_b and span < TAU / n and embedded
+        lines.append("%d 枚 %g→%g°%s: 羽根の幅は間隔の %.0f%%%s" % (n, tr, tt, " 後退%g°" % sw if sw else "",
+                                                             100 * span / (TAU / n),
+                                                          "" if embedded else " 根元が出る"))
     c.check(ok_b, "R-05: blade_count と twist を変えても、羽根どうしが干渉せず根元はハブに埋まる",
             " / ".join(lines))
     load(RECIPES["R5"])
@@ -1584,26 +1650,39 @@ def render_docs():
     cb, db = fit(["/obj/test_bent_single", "/obj/test_bent_double"], [1], 2.0)
     shoot("bent_tests", (1200, 600), cb, db, 15, 25, "/obj/test_bent_single /obj/test_bent_double" + ground)
 
-    # ギャラリー: 20 本を 1 枚ずつ撮って 5 × 4 に並べる
-    tile, cols = (384, 256), 5
-    sheet = Image.new("RGB", (tile[0] * cols, (tile[1] + 34) * 4), (236, 238, 242))
+    # ギャラリー: 1 本ずつ撮って 5 列に並べる（Phase1 の 20 本と、回転系の 10 本）
     try:
         from PIL import ImageDraw, ImageFont
         font = ImageFont.truetype("C:/Windows/Fonts/meiryo.ttc", 19)
     except Exception:
         font = None
-    for i, (key, title, _) in enumerate(PRESETS):
-        pth = "/obj/preset%s" % key
-        cc, dd = fit([pth], span, tile[0] / float(tile[1]), margin=1.05)
-        shoot("_tile", tile, cc, dd, 24, 50, pth + ground, frame=37)
-        img = Image.open(IMG_DIR + "/_tile.png")
-        x, y = (i % cols) * tile[0], (i // cols) * (tile[1] + 34)
-        sheet.paste(img, (x, y + 34))
-        if font is not None:
-            ImageDraw.Draw(sheet).text((x + 10, y + 5), "%s  %s" % (key, title), fill=(40, 42, 48), font=font)
-    sheet.save(IMG_DIR + "/gallery.png")
-    os.remove(IMG_DIR + "/_tile.png")
-    print("image: gallery")
+
+    def sheet_of(entries, prefix, out_name, frame=37, pitch=24, yaw=50):
+        tile, cols = (384, 256), 5
+        rows = (len(entries) + cols - 1) // cols
+        sheet = Image.new("RGB", (tile[0] * cols, (tile[1] + 34) * rows), (236, 238, 242))
+        for i, (key, title, _) in enumerate(entries):
+            pth = "/obj/%s%s" % (prefix, key)
+            cc, dd = fit([pth], span, tile[0] / float(tile[1]), margin=1.05)
+            shoot("_tile", tile, cc, dd, pitch, yaw, pth + ground, frame=frame)
+            img = Image.open(IMG_DIR + "/_tile.png")
+            x, y = (i % cols) * tile[0], (i // cols) * (tile[1] + 34)
+            sheet.paste(img, (x, y + 34))
+            if font is not None:
+                ImageDraw.Draw(sheet).text((x + 10, y + 5), "%s  %s" % (key, title), fill=(40, 42, 48), font=font)
+        sheet.save(IMG_DIR + "/" + out_name + ".png")
+        os.remove(IMG_DIR + "/_tile.png")
+        print("image:", out_name)
+
+    sheet_of(PRESETS, "preset", "gallery")
+    sheet_of(ROTARY_PRESETS, "rotary", "gallery_rotary", frame=31, pitch=22, yaw=35)
+
+    # 回転系の GIF（遊星ギア、タワー、向きを保つファン、クランク）
+    for key, pitch, yaw, margin in (("R2", 18, 20, 0.62), ("C1", 18, 40, 0.9), ("C2", 20, 55, 0.75),
+                                    ("R4", 15, 75, 0.85)):
+        pth = "/obj/rotary" + key
+        cc, dd = fit([pth], span, 16 / 9.0)
+        gif("rotary_" + key, (720, 405), cc, dd * margin, pitch, yaw, pth + ground)
     shutil.rmtree(tmpdir)
 
 

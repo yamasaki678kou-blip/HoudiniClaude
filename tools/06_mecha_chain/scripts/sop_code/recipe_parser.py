@@ -411,7 +411,9 @@ def desugar_turbine(prm, opts, parent, explicit):
          "pitch_anim": pitch, "nwidth": len(widths)}
     for i, w in enumerate(widths):
         g["width%d" % i] = w
-    hub_len = max(hub_h, 1.0) + (1.6 * hub_r if hub == "spinner" else 0.0)
+    # 出力ソケットはハブの先。ハブは羽根の根元が埋まる高さまで伸びるので、その上限で見積もる
+    hub_top = max(hub_h, widths[0] * (abs(math.sin(math.radians(tr))) + 0.25) + 0.3)
+    hub_len = hub_top + {"spinner": 1.6, "sphere": 0.7}.get(hub, 0.0) * hub_r
     ln = explicit.get("len", hub_len * prm["rad"])
     return add_part("motor_rot", dict(len=ln, speed=prm["speed"], phase=prm["phase"], axis=2, pa=1.0), parent,
                     geo_id=gid, geo_attrs=g, housing=1, rotor=1)
@@ -600,17 +602,19 @@ def desugar_planetary(prm, opts, parent):
     sp_s, ph_s = sp, ph + theta_m
     gbase = {"module": m, "thick": t, "profile": prof, "helix": hel}
 
-    def gear_id(kind, z, hand):
-        return "pg%s_z%d_m%s_t%s_p%d_h%s" % (kind, z, fnum(m), fnum(t), prof, fnum(hel * hand))
+    def gear_id(kind, z, hand, mates):
+        # 歯の形は噛み合う相手で少し削るので（めり込み防止）、相手の歯数も形の一部として geo_id に入れる
+        return "pg%s_z%d_m%s_t%s_p%d_h%s_w%s" % (kind, z, fnum(m), fnum(t), prof, fnum(hel * hand),
+                                                 "-".join("%d" % x for x in mates))
 
     r_case = m * (R / 2.0 + 1.25) + 0.6 * m * 4 + 0.35
     base = add_part("fixed", dict(len=0.0), parent,
                     geo_id="pgcase_r%s_t%s_w%d_c%d" % (fnum(r_case), fnum(t), win, hcurve),
                     geo_attrs={"r_case": r_case, "thick": t, "windows": win, "curve": hcurve}, housing=1)
     ring = add_part("motor_rot", dict(len=0.0, speed=sp_r, phase=ph_r, pa=1.0), base, internal=0 if out == "ring" else 1,
-                    geo_id=gear_id("ring", R, -1), geo_attrs=dict(gbase, teeth=R, internal=1, hand=-1), rotor=1)
+                    geo_id=gear_id("ring", R, -1, [P]), geo_attrs=dict(gbase, teeth=R, internal=1, hand=-1, mate_ext=P), rotor=1)
     sun = add_part("motor_rot", dict(len=0.0, speed=sp_s, phase=ph_s, pa=1.0), base, internal=0 if out == "sun" else 1,
-                   geo_id=gear_id("sun", S, 1), geo_attrs=dict(gbase, teeth=S, internal=0, hand=1), rotor=1)
+                   geo_id=gear_id("sun", S, 1, [P]), geo_attrs=dict(gbase, teeth=S, internal=0, hand=1, mate_ext=P), rotor=1)
     carrier = add_part("motor_rot", dict(len=0.0, speed=sp_c, phase=ph_c, pa=1.0), base,
                        internal=0 if out == "carrier" else 1,
                        geo_id="pgcarrier_%s_n%d_a%s_t%s" % (cform, N, fnum(a), fnum(t)),
@@ -627,7 +631,8 @@ def desugar_planetary(prm, opts, parent):
         # 噛み合い位相は自転パーツの phase だけに入れる（形には焼かない、geo_id にも入れない）
         psi0 = beta * (1.0 + float(S) / P) + 180.0 - 180.0 / P - sigma * float(S) / P
         add_part("motor_rot", dict(len=0.0, speed=rel_speed, phase=psi0, pa=1.0), off, internal=1,
-                 geo_id=gear_id("planet", P, -1), geo_attrs=dict(gbase, teeth=P, internal=0, hand=-1), rotor=1)
+                 geo_id=gear_id("planet", P, -1, [S, R]), geo_attrs=dict(gbase, teeth=P, internal=0, hand=-1, mate_ext=S, mate_int=R),
+                 rotor=1)
     member = {"carrier": carrier, "ring": ring, "sun": sun}[out]
     return add_part("fixed", dict(len=(t + 1.0) * prm["rad"]), member,
                     geo_id="pgshaft_t%s" % fnum(t), geo_attrs={"thick": t}, rotor=1)
