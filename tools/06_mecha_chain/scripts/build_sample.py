@@ -82,7 +82,8 @@ PRESETS = [
      "link(len=0.7) > cap | link(len=0.7) > cap ]"),
     ("16", "ピストンポンプ",
      "base > motor_rot(speed=0.7) > piston(a=0.5) > link(len=0.8) > piston(a=0.5, phase=180) > cap"),
-    ("17", "アンテナ／レーダー", "base > servo(b=50, c=0.3) > offset(a=0.2) > link(len=0.3) > cap(rad=0.35)"),
+    # 17 だけ値を変えた: offset の横ずれを rad 単位にしたので、元の a=0.2（生の値）を 0.2 / 0.15 = 1.333 に読み替え
+    ("17", "アンテナ／レーダー", "base > servo(b=50, c=0.3) > offset(a=1.333) > link(len=0.3) > cap(rad=0.35)"),
     ("18", "ゲート開閉（drive=Block）", "base > hinge(axis=1, a=0, b=40, c=0.25, drive=1) > link(len=1.8) > cap"),
     ("19", "カウンター回転ツイン",
      "base > motor_rot(speed=0.8) > link(len=0.5) > motor_rot(speed=-1.3) > link(len=0.5) > "
@@ -126,7 +127,7 @@ DEFAULTS = {
     "spring": dict(pa=5.0, pb=10.0, pc=0.5),
     "fixed": dict(),
     "link": dict(),
-    "offset": dict(pa=0.3, pb=0.0),
+    "offset": dict(pa=2.0, pb=0.0),  # 横ずれは rad 単位（元の 0.3 = 根の太さ 0.15 の 2 倍）
     "bent": dict(pa=30.0, pb=0.0),
     "splitter": dict(pa=2.0, pb=45.0, pc=0.0),
     "branch": dict(len=0.0),
@@ -1396,6 +1397,16 @@ def verify():
     ok = all(abs(x / r - 1.0) < 1e-5 and abs(y / r - 0.5) < 1e-5 for x, y, r in offs)
     c.check(ok, "offset の横ずれは rad 単位: rad を 2 倍にすると、ずれも 2 倍（形との比率が一定）",
             " / ".join("rad %.2f → ずれ (%.3f, %.3f)" % (r, x, y) for x, y, r in offs))
+    # 単位を変えたので、offset を使う値（プリセット17 と既定値）を読み替えた。見た目が前と同じかを確かめる
+    m.parm("recipe").set(RECIPES["17"])
+    st = chain_state(m, 1)
+    d17 = vlen(vsub(st[2]["fp"], st[1]["sp"]))
+    m.parm("recipe").set("base > offset > link")
+    st = chain_state(m, 1)
+    d0 = vlen(vsub(st[1]["fp"], st[0]["sp"]))
+    c.check(abs(d17 - 0.2) < 1e-3 and abs(d0 - 0.3) < 1e-6,
+            "offset の値の読み替え: プリセット17 と既定値のずれが単位変更前と同じ",
+            "プリセット17: %.4f（前 0.2）/ 既定: %.4f（前 0.3）" % (d17, d0))
 
     m.parm("recipe").set(RECIPES["02"])
     tip1 = chain_state(m, 25)[-1]["sp"]

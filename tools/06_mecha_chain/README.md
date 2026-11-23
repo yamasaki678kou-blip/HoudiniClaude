@@ -24,7 +24,7 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `mecha_chain_sample.hiplc` | 見本のシーン。レシピ02、プリセット 20 本、検証チェーン、練習用 |
 | `otls/mecha_chain.hdalc` | HDA 本体（`hclaude::mecha_chain::1.0`、ラベル「汎用メカチェーン」） |
 | `scripts/build_sample.py` | HDA と見本シーンと画像を、ゼロから作り直すスクリプト |
-| `verify_log.txt` | 自動検証の結果（63 項目、すべて PASS） |
+| `verify_log.txt` | 自動検証の結果（64 項目、すべて PASS） |
 | `export/` | レシピ02 を VAT（剛体モード）で書き出したもの（FBX + EXR + Unity 用マテリアル） |
 | `images/` | この README の画像と GIF |
 | `REPORT.md` | しくみの解説（技術記事のたたき台） |
@@ -110,6 +110,7 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `drill` / `wheel` | 回る速さの倍率 | | | |
 
 `offset` の横のずれだけは、長さ `len` と違って **太さ `rad` が 1 の物差し** です。`offset(a=1)` は「太さ 1 本ぶん横へずらす」で、`rad` を変えても形とずれの比率が変わりません。
+（このため、レシピ集の 17 番の `offset(a=0.2)` は、HDA のプリセットでは同じ見た目になる `offset(a=1.333)` に読み替えてあります。）
 
 `link`、`fixed`、`cap`（先端のふた）、`foot`（足）は共通のキーだけです。
 別名も使えます: `mrot` = `motor_rot`、`mosc` = `motor_osc`、`uni` = `universal`、`slide` = `prismatic`、`endcap` = `cap`。
