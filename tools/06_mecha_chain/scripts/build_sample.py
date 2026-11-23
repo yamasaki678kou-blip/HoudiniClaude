@@ -1234,6 +1234,9 @@ def verify():
                         ("base > link  # メモ\n > cap", "# コメントと改行")]:
         errs = parser_errors(m, recipe)
         c.check(len(errs) == 0, "通る: " + why, errs[0] if errs else "")
+    parser_errors(m, "base > link(lenn=2) > cap")
+    warns = m.node("recipe_parser").warnings()
+    c.check(len(warns) > 0, "使われないキーは警告（黄色）で知らせる", warns[0].splitlines()[-1][:60] if warns else "警告が出ない")
 
     # --- 3. ソルバ: 全プリセット + レシピ02の組み替え でソケット契約が崩れない
     variants = [("02 順番入れ替え", "base > hinge(axis=0, a=10, b=30, c=0.6) > motor_rot(speed=0.3) > "
