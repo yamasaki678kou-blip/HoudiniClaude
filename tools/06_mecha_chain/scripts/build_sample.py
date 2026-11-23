@@ -49,7 +49,7 @@ PRESETS = [
      "hinge(axis=0, a=30, b=20, c=0.5, phase=90) > servo(b=35, c=0.7) > gripper(b=1)"),
     ("06", "スカラっぽい水平アーム",
      "base > motor_rot(axis=1, speed=0.4) > link(len=1.2) > motor_rot(axis=1, speed=-0.6) > "
-     "link(len=1.0) > prismatic(a=0, b=0.4, c=1.0) > drill(pa=2.0)"),
+     "link(len=1.0) > prismatic(a=0, b=0.4, c=1.0) > drill(a=2.0)"),
     ("07", "クレーン",
      "base > motor_rot(axis=1, speed=0.15) > hinge(axis=0, a=35) > prismatic(a=0.5, b=2.2) > "
      "twist(a=15) > cap"),
@@ -63,7 +63,7 @@ PRESETS = [
      "hinge(axis=0,b=30,c=1.0,phase=90) > link(len=0.9) > hinge(axis=0,a=25,b=20,c=1.0,phase=270) > "
      "foot | hinge(axis=0,b=30,c=1.0,phase=270) > link(len=0.9) > "
      "hinge(axis=0,a=25,b=20,c=1.0,phase=90) > foot ] ]"),
-    ("10", "一輪セグウェイ風", "base > spring(a=6, b=8) > link(len=0.8) > wheel(pa=1.0)"),
+    ("10", "一輪セグウェイ風", "base > spring(a=6, b=8) > link(len=0.8) > wheel(a=1.0)"),
     ("11", "ヘビ型",
      "base > motor_osc(axis=1, b=25, speed=0.8) > link(len=0.5) > "
      "motor_osc(axis=1, b=25, speed=0.8, phase=45) > link(len=0.5) > "
@@ -92,496 +92,63 @@ PRESETS = [
      "base > motor_osc(b=15, speed=1.2) > spring(a=3, b=20) > link(len=0.6) > spring(a=2, b=25) > "
      "link(len=0.6) > spring(a=1.5, b=30) > cap(rad=0.25)"),
 ]
-RECIPES = dict((k, r) for k, _, r in PRESETS)
+
+# 回転モーター系 5 種（仕様 v0.5）の見本と、仕様 §6 の組み合わせ例
+ROTARY_PRESETS = [
+    ("R1", "R-01 同軸スタック（層ごとに形を変える）",
+     "base > coax(layers=4, ratio=[1,-0.8,0.5,-1.4], form=[disc,blades,gear,ring]) > link(len=0.6) > cap"),
+    ("R2", "R-02 遊星ギア（キャリア出力）",
+     "base > planetary(sun_teeth=12, planet_count=3, speed=1.2) > link(len=0.6) > cap"),
+    ("R3", "R-03 ジンバル（stabilize）",
+     "base > motor_osc(axis=0, b=35, speed=0.35) > hinge(axis=1, b=30, c=0.45) > link(len=0.5) > "
+     "gimbal(mode=stabilize, payload_form=socket)"),
+    ("R4", "R-04 クランク（ガイドずらし）",
+     "base > crank(eccentric=0.8, rod_len=3, guide_offset=0.6, speed=0.6) > link(len=0.5) > cap"),
+    ("R5", "R-05 タービン（シュラウド付き）",
+     "base > turbine(blade_count=5, twist_root=45, twist_tip=15, sweep=12, shroud=1, speed=1.2, pitch_anim=10)"),
+    ("C1", "R-02 → R-01 重々しく回るタワー",
+     "base > planetary(sun_teeth=10, planet_count=4, speed=2) > coax(layers=5, form=[cage,disc], layer_gap=0.45, "
+     "stack_mode=independent) > cap"),
+    ("C2", "R-03 → R-05 向きを保つファン",
+     "base > motor_osc(axis=0, b=35, speed=0.3) > link(len=0.8) > gimbal(mode=stabilize, angle_list=[0,0,0]) > "
+     "turbine(blade_count=3, speed=2, hub_form=cyl, blade_len=2)"),
+    ("C3", "R-04 → piston クランク駆動",
+     "base > crank(eccentric=1, rod_len=3.5, pin_count=2, pin_phase_list=[0,180], speed=0.7) > piston(a=0.3) > cap"),
+    ("C4", "R-01 二重反転プロペラ",
+     "base > coax(layers=2, ratio=[1,-1], form=blades, blade_count=3, stack_mode=independent, layer_gap=0.5, speed=1.5) > cap"),
+    ("C5", "R-02 → R-04 減速して往復（プレス）",
+     "base > planetary(sun_teeth=12, planet_count=3, speed=3) > crank(eccentric=1.2, rod_len=4, d=1) > "
+     "link(len=0.5) > cap"),
+]
+RECIPES = dict((k, r) for k, _, r in PRESETS + ROTARY_PRESETS)
 
 # 検証用のチェーン（実装パケット §5.2 の bent テスト + 順序の差が出る 2 回折りテスト）
 BENT_SINGLE = "base > bent(a=45) > link > cap"
 BENT_DOUBLE = "base > bent(a=90) > bent(a=90, b=90) > link"
 
 # ----------------------------------------------------------------------------
-# 1. recipe_parser（Python SOP）… 実装パケット §3 v0.2 が元。実装側の追加は「# 追加:」の行
+# 1〜4. ノードの中身（Python SOP と VEX）は scripts/sop_code/ の別ファイルに置いています
+#   recipe_parser.py   … レシピ → パーツの点（文法 v1.2、回転系 5 種の分解）
+#   socket_solver.vex  … 親から順に frame / socket を計算（ジンバルの分解、クランクの式）
+#   frame_decompose.vex… 標準の属性へ（回転系は _housing / _rotor の 2 個に分ける）
+#   detail_pieces.vex  … 軸 rod、グリッパの指、タービンの羽根
+#   variant_builder.py … 回転系の形のバリアント（geo_id ごとに 1 回）
+#   classify_shapes.py … 第2入力の読み分け（断面カーブ / 差し替えメッシュ / ターゲット点）
 # ----------------------------------------------------------------------------
-PARSER_CODE = r'''# recipe_parser - Python SOP
-# レシピ文字列を読んで、パーツ 1 個 = 点 1 個 にします。親 → 子の順に点を並べ、親子を線でつなぎます。
-# 元: 実装パケット v0.3 §3（パーサ v0.2）。「# 追加:」の行は実装側で足したエラーチェックなどです。
-import re
-
-node = hou.pwd()
-geo = node.geometry()
-geo.clear()
-
-recipe = node.evalParm("recipe")
-global_speed = node.evalParm("global_speed")
-
-DEFAULTS = {
-    "base": dict(len=0.0),
-    "motor_rot": dict(pa=1.0),
-    "motor_osc": dict(pa=0.0, pb=40.0),
-    "servo": dict(pa=0.0, pb=30.0, pc=1.0),
-    "piston": dict(pa=0.4, pb=0.5),
-    "hinge": dict(pa=0.0, pb=0.0, pc=0.0, pd=0.0),
-    "ball": dict(pa=15.0, pb=0.0, pc=0.0),
-    "universal": dict(pa=20.0, pb=0.0, pc=0.3),
-    "prismatic": dict(pa=0.0, pb=0.5, pc=0.0),
-    "twist": dict(pa=0.0, pb=0.0),
-    "spring": dict(pa=5.0, pb=10.0, pc=0.5),
-    "fixed": dict(),
-    "link": dict(),
-    "offset": dict(pa=2.0, pb=0.0),  # 横ずれは rad 単位（元の 0.3 = 根の太さ 0.15 の 2 倍）
-    "bent": dict(pa=30.0, pb=0.0),
-    "splitter": dict(pa=2.0, pb=45.0, pc=0.0),
-    "branch": dict(len=0.0),
-    "gripper": dict(len=0.3, pa=25.0, pb=0.0),
-    "wheel": dict(len=0.2, pa=1.0),
-    "foot": dict(len=0.2),
-    "drill": dict(len=0.4, pa=1.0),
-    "head": dict(len=0.3, pa=30.0, pb=10.0, pc=1.0),
-    "cap": dict(len=0.15),
-}
-ALIASES = {"mrot": "motor_rot", "mosc": "motor_osc", "uni": "universal",
-           "slide": "prismatic", "endcap": "cap"}
-SLOT_ALIAS = {"a": "pa", "b": "pb", "c": "pc", "d": "pd"}  # レシピは a〜d、内部は pa〜pd
-COMMON = dict(len=1.0, axis=2, speed=1.0, phase=0.0, drive=0, ratio=1.0,
-              join=0, limit_min=-180.0, limit_max=180.0, seed=0)
-ROOT_RAD = 0.15
-MAX_PARTS = 256
-# 造形の大きさの決め方: 0 = 固定（太さ rad だけで決まる）, 1 = 伸びる（Z が len + ext）
-SCALE_MODE = {"link": 1, "offset": 1, "bent": 1, "prismatic": 1, "piston": 1}
-# APEX 用のタグ（Phase4 でリグ自動生成が読む予定）
-TAGS = {"motor_rot": "motor_rotary", "motor_osc": "motor_osc", "servo": "servo",
-        "hinge": "joint_hinge", "ball": "joint_ball", "universal": "joint_universal",
-        "prismatic": "joint_slide", "twist": "joint_twist", "spring": "joint_spring",
-        "gripper": "effector_gripper", "wheel": "effector_wheel",
-        "drill": "effector_tool", "head": "effector_head"}
-# 追加: レシピに書いてよいキー（これ以外は警告）
-VALID_KEYS = set(COMMON) | set(["rad", "pa", "pb", "pc", "pd"])
+CODE_DIR = os.path.dirname(os.path.abspath(__file__)).replace("\\", "/") + "/sop_code"
 
 
-def fail(msg):
-    # Houdini のノードエラーとして表示する（赤いエラー表示 + メッセージ）
-    raise hou.NodeError(msg)
+def load_code(name):
+    with open(CODE_DIR + "/" + name, "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
-def warn(msg):
-    try:
-        node.addWarning(msg)
-    except Exception:
-        pass
-
-
-TOKEN_RE = re.compile(r"\s*(>|\[|\]|\||[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)]*\))?)\s*")
-
-
-def tokenize(s):
-    toks, i = [], 0
-    s = s.strip()
-    while i < len(s):
-        m = TOKEN_RE.match(s, i)
-        if not m or m.end() == i:
-            fail("parse error / 読めない文字があります: %r" % s[i:i + 20])
-        toks.append(re.sub(r"\s+", "", m.group(1)))
-        i = m.end()
-    return toks
-
-
-def parse_part_token(tok):
-    m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(?:\((.*)\))?$", tok)
-    name = ALIASES.get(m.group(1), m.group(1))
-    if name not in DEFAULTS or name == "branch":
-        # 追加: 知らないパーツ名は黙って通さない（打ち間違いに気づけるように）
-        fail("unknown part / 知らないパーツ名です: %s" % m.group(1))
-    explicit = {}
-    if m.group(2):
-        for kv in m.group(2).split(","):
-            if not kv.strip():
-                continue
-            if kv.count("=") != 1:
-                fail("bad parameter / 「名前=値」の形で書いてください: %s(%s)" % (name, kv.strip()))
-            k, v = kv.split("=")
-            k = SLOT_ALIAS.get(k.strip(), k.strip())
-            try:
-                explicit[k] = float(v)
-            except ValueError:
-                fail("bad value / 数値ではありません: %s(%s)" % (name, kv.strip()))
-            if k not in VALID_KEYS:
-                warn("unknown key / 使われないキーです: %s(%s)" % (name, k))
-    return name, explicit
-
-
-parts = []  # dict(name, params, parent, depth)
-
-
-def add_part(name, explicit, parent):
-    if len(parts) >= MAX_PARTS:
-        fail("too many parts / パーツは %d 個までです" % MAX_PARTS)
-    prm = dict(COMMON)
-    prm.update(DEFAULTS.get(name, {}))
-    # rad の継承: 明示した値が勝つ。書いていなければ親の（解決済みの）値を受け継ぐ
-    explicit = dict(explicit)
-    if "rad" in explicit:
-        prm["rad"] = explicit.pop("rad")
-    elif parent >= 0:
-        prm["rad"] = parts[parent]["params"]["rad"]
-    else:
-        prm["rad"] = ROOT_RAD
-    prm.update(explicit)
-    depth = 0 if parent < 0 else parts[parent]["depth"] + 1
-    parts.append(dict(name=name, params=prm, parent=parent, depth=depth))
-    return len(parts) - 1
-
-
-def parse_chain(toks, pos, parent):
-    last = parent
-    while pos < len(toks):
-        tok = toks[pos]
-        if tok in ("]", "|"):
-            break
-        if tok == ">":
-            pos += 1
-            continue
-        if tok == "[":
-            fail("'[' must follow a splitter / [ は splitter の直後にだけ書けます")
-        name, explicit = parse_part_token(tok)
-        idx = add_part(name, explicit, last)
-        pos += 1
-        if name == "splitter":
-            n = int(round(parts[idx]["params"].get("pa", 2)))
-            spread = parts[idx]["params"].get("pb", 45.0)
-            if n < 2 or n > 4:
-                fail("splitter の分岐数 a は 2〜4 です（a=%d）" % n)
-            if pos >= len(toks) or toks[pos] != "[":
-                fail("splitter requires [ branch | branch ] / splitter の後ろに [ 枝 | 枝 ] が必要です")
-            pos += 1
-            branch_ids = []
-            while True:
-                bidx = add_part("branch", dict(len=0.0, pre_yaw=0.0), idx)
-                branch_ids.append(bidx)
-                pos, _ = parse_chain(toks, pos, bidx)
-                if pos < len(toks) and toks[pos] == "|":
-                    pos += 1
-                    continue
-                if pos < len(toks) and toks[pos] == "]":
-                    pos += 1
-                    break
-                fail("splitter branches must end with ] / 枝の最後は ] で閉じてください")
-            if len(branch_ids) != n:
-                # 追加: 枝の数と a の食い違いを止める（少ない場合も黙って進まない）
-                fail("splitter(a=%d) なのに枝が %d 本あります" % (n, len(branch_ids)))
-            for k, bidx in enumerate(branch_ids):
-                parts[bidx]["params"]["pre_yaw"] = spread * (k - (n - 1) / 2.0)
-            return pos, idx  # splitter はそのチェーンの終わり（枝の中での入れ子は可）
-        last = idx
-    return pos, last
-
-
-# 追加: # から行末まではコメントとして読み飛ばす（複数行のレシピにメモを書けるように）
-recipe = re.sub(r"#[^\n]*", "", recipe)
-toks = tokenize(recipe)
-if toks:
-    end, _ = parse_chain(toks, 0, -1)
-    if end < len(toks):
-        # 追加: splitter の ] の後ろに続けた、余分な ] や | がある、など
-        fail("extra tokens / ここから先が読めません（splitter の後ろには続けられません）: %s"
-             % " ".join(toks[end:end + 3]))
-if not parts:
-    add_part("base", {}, -1)  # 空のレシピは base 1 点で通す
-
-# ---- 属性を作る（所有権表 §4: ここで書いた属性を、ソルバ以降が読む）
-geo.addAttrib(hou.attribType.Global, "global_speed", 1.0)
-geo.setGlobalAttribValue("global_speed", float(global_speed))
-for nm in ("part_type", "tag", "name"):
-    geo.addAttrib(hou.attribType.Point, nm, "")
-for nm, dv in [("parent_id", -1), ("order", 0), ("depth", 0), ("axis", 2),
-               ("drive_mode", 0), ("join_mode", 0), ("scale_mode", 0), ("has_geo", 1)]:
-    geo.addAttrib(hou.attribType.Point, nm, dv)
-for nm in ("length", "radius", "speed", "phase", "ratio",
-           "limit_min", "limit_max", "pa", "pb", "pc", "pd", "pre_yaw", "pre_pitch"):
-    geo.addAttrib(hou.attribType.Point, nm, 0.0)
-
-points = []
-for i, p in enumerate(parts):
-    pt = geo.createPoint()
-    prm = p["params"]
-    pt.setAttribValue("part_type", p["name"])
-    pt.setAttribValue("tag", TAGS.get(p["name"], ""))
-    pt.setAttribValue("name", "part%d_%s" % (i, p["name"]))
-    pt.setAttribValue("parent_id", p["parent"])
-    pt.setAttribValue("order", i)
-    pt.setAttribValue("depth", p["depth"])
-    pt.setAttribValue("length", float(prm.get("len", 1.0)))
-    pt.setAttribValue("radius", float(prm["rad"]))
-    pt.setAttribValue("speed", float(prm.get("speed", 1.0)))
-    pt.setAttribValue("phase", float(prm.get("phase", 0.0)))
-    pt.setAttribValue("ratio", float(prm.get("ratio", 1.0)))
-    pt.setAttribValue("limit_min", float(prm.get("limit_min", -180.0)))
-    pt.setAttribValue("limit_max", float(prm.get("limit_max", 180.0)))
-    pt.setAttribValue("axis", int(prm.get("axis", 2)))
-    pt.setAttribValue("drive_mode", int(prm.get("drive", 0)))
-    pt.setAttribValue("join_mode", int(prm.get("join", 0)))
-    pt.setAttribValue("scale_mode", SCALE_MODE.get(p["name"], 0))
-    pt.setAttribValue("has_geo", 0 if p["name"] == "branch" else 1)
-    for k in ("pa", "pb", "pc", "pd", "pre_yaw", "pre_pitch"):
-        pt.setAttribValue(k, float(prm.get(k, 0.0)))
-    points.append(pt)
-
-for i, p in enumerate(parts):
-    if p["parent"] >= 0:
-        poly = geo.createPolygon(False)
-        poly.addVertex(points[p["parent"]])
-        poly.addVertex(points[i])
-'''
-
-# ----------------------------------------------------------------------------
-# 2. socket_solver（Detail Wrangle）… 実装パケット §5 v0.3（クォータニオン状態方式）
-# ----------------------------------------------------------------------------
-SOLVER_VEX = r'''// ============================================================
-// socket_solver（Detail Wrangle = 1 回だけ実行）
-// 各パーツの置き場所（frame）と出力ソケット（socket）を、親から順に計算します。
-// パーサが「親が先」の順で点を並べているので、0 番から順に計算すれば
-// 親のソケットは必ず先に求まっています。
-// 元: 実装パケット v0.3 §5.3。関数名は実機に合わせてあります。
-// ============================================================
-
-// ---- 掛け算の順番に気をつける場所は、この compose() 1 か所だけ ----
-// qmultiply(a, b) は「先に b（子のローカル回転）、次に a（親の向き）」の順で回す合成です。
-// 実機テストで qrotate(qmultiply(a, b), v) == qrotate(a, qrotate(b, v)) を確かめてあります。
-vector4 compose(vector4 parent_q; vector4 local_q)
-{
-    return qmultiply(parent_q, local_q);
-}
-// 角度（度）と軸から回転（クォータニオン）を作る
-vector4 q_axis(float deg; vector axis)
-{
-    return quaternion(radians(deg), axis);
-}
-
-float T = @Time * f@global_speed;   // 時刻（秒）× 全体の速さ（パーサが detail 属性に書いた値）
-int n = npoints(0);
-
-addpointattrib(0, "frame_pos", {0, 0, 0});
-addpointattrib(0, "frame_orient", {0, 0, 0, 1});
-addpointattrib(0, "socket_pos", {0, 0, 0});
-addpointattrib(0, "drive_angle", 0.0);
-addpointattrib(0, "ext", 0.0);
-addpointattrib(0, "open_angle", 0.0);
-
-// ---- 入力を配列に写す（point() は入力のスナップショットを読むので安全） ----
-string types[];
-int parents[];
-int axes[];
-int dmodes[];
-int joins[];
-int depths[];
-float lens[];
-float speeds[];
-float phases[];
-float ratios[];
-float lmins[];
-float lmaxs[];
-float pas[];
-float pbs[];
-float pcs[];
-float pds[];
-float preyaws[];
-float rads[];
-resize(rads, n);
-resize(types, n); resize(parents, n); resize(axes, n); resize(dmodes, n);
-resize(joins, n); resize(depths, n); resize(lens, n); resize(speeds, n);
-resize(phases, n); resize(ratios, n); resize(lmins, n); resize(lmaxs, n);
-resize(pas, n); resize(pbs, n); resize(pcs, n); resize(pds, n); resize(preyaws, n);
-for (int i = 0; i < n; i++) {
-    types[i]   = point(0, "part_type", i);
-    parents[i] = point(0, "parent_id", i);
-    axes[i]    = point(0, "axis", i);
-    dmodes[i]  = point(0, "drive_mode", i);
-    joins[i]   = point(0, "join_mode", i);
-    depths[i]  = point(0, "depth", i);
-    lens[i]    = point(0, "length", i);
-    speeds[i]  = point(0, "speed", i);
-    phases[i]  = point(0, "phase", i);
-    ratios[i]  = point(0, "ratio", i);
-    lmins[i]   = point(0, "limit_min", i);
-    lmaxs[i]   = point(0, "limit_max", i);
-    pas[i]     = point(0, "pa", i);
-    pbs[i]     = point(0, "pb", i);
-    pcs[i]     = point(0, "pc", i);
-    pds[i]     = point(0, "pd", i);
-    preyaws[i] = point(0, "pre_yaw", i);
-    rads[i]    = point(0, "radius", i);
-}
-
-// 計算結果を入れる配列（子は親の値をここから読む）
-vector sout_pos[];
-vector4 sout_ori[];
-vector fpos[];
-vector4 fori[];
-float drv[];
-float exts[];
-float opens[];
-resize(sout_pos, n); resize(sout_ori, n); resize(fpos, n); resize(fori, n);
-resize(drv, n); resize(exts, n); resize(opens, n);
-
-vector AXES[] = { {1, 0, 0}, {0, 1, 0}, {0, 0, 1} };   // axis 0 = X / 1 = Y / 2 = Z
-vector4 QIDENT = {0, 0, 0, 1};                          // 回転なし
-
-for (int i = 0; i < n; i++) {
-    int par = parents[i];
-    vector  pp  = par < 0 ? set(0, 0, 0) : sout_pos[par];   // 親の出力ソケットの位置
-    vector4 pq  = par < 0 ? QIDENT : sout_ori[par];         // 親の出力ソケットの向き
-    float   din = par < 0 ? 0.0 : drv[par];                 // 親から流れてくる駆動角
-    string ty = types[i];
-    float ph = phases[i];
-    float sp = speeds[i];
-    float wt = 360.0 * sp * T + ph;                         // 1 秒で speed 回転する角度（度）
-    vector ax = AXES[clamp(axes[i], 0, 2)];
-
-    vector4 ql = QIDENT;          // このパーツのローカル回転
-    vector off = set(0, 0, 0);    // ローカルのずれ（offset だけが使う）
-    float ext = 0.0;              // 伸びる量（piston / prismatic）
-    float dout = din;             // 子へ流す駆動角（既定は素通し = Through）
-    float oa = 0.0;               // グリッパの開き角
-
-    if (ty == "branch") {
-        ql = q_axis(preyaws[i], set(0, 1, 0));
-    } else if (ty == "motor_rot") {
-        float ang = pas[i] * wt;
-        ql = q_axis(ang, ax);
-        dout = joins[i] == 1 ? din + ang : ang;
-    } else if (ty == "motor_osc") {
-        float w = pas[i] > 0.5 ? (2.0 * abs(frac(wt / 360.0) * 2.0 - 1.0) - 1.0)
-                               : sin(radians(wt));
-        float ang = pbs[i] * w;
-        ql = q_axis(ang, ax);
-        dout = joins[i] == 1 ? din + ang : ang;
-    } else if (ty == "servo") {
-        float ang = clamp(pas[i] + pbs[i] * sin(radians(360.0 * sp * pcs[i] * T + ph)),
-                          lmins[i], lmaxs[i]);
-        ql = q_axis(ang, ax);
-        dout = ang;
-    } else if (ty == "piston") {
-        ext = pas[i] * (0.5 - 0.5 * cos(radians(wt)));
-    } else if (ty == "hinge") {
-        float ang;
-        if (pds[i] > 0.5) {
-            // 駆動消費（d=1）: 上流の駆動角をそのまま関節角に使う。
-            // 累積角なのでクランプしない（v0.3 の修正。クランプすると limit に張り付く）
-            ang = din;
-        } else {
-            ang = pas[i] + (pcs[i] > 0 ? pbs[i] * sin(radians(360.0 * sp * pcs[i] * T + ph)) : 0.0);
-            ang = clamp(ang, lmins[i], lmaxs[i]);
-        }
-        ql = q_axis(ang, ax);
-        if (dmodes[i] == 1) dout = 0.0;
-    } else if (ty == "ball") {
-        float ax_ = clamp(pas[i] + pcs[i] * sin(radians(wt)), lmins[i], lmaxs[i]);
-        float ay_ = clamp(pbs[i] + pcs[i] * cos(radians(wt)), lmins[i], lmaxs[i]);
-        ql = qmultiply(q_axis(ax_, set(1, 0, 0)), q_axis(ay_, set(0, 1, 0)));
-        dout = 0.0;
-    } else if (ty == "universal" || ty == "bent") {
-        vector axv = set(cos(radians(pbs[i])), sin(radians(pbs[i])), 0);   // b = 折れる向き（度）
-        ql = q_axis(pas[i], axv);                                          // a = 折れ角（度）
-    } else if (ty == "twist") {
-        ql = q_axis(pas[i] + pbs[i] * T, set(0, 0, 1));
-    } else if (ty == "spring") {
-        float lag = depths[i] * 30.0 / max(pas[i], 0.001);   // 根から遠いほど遅れる（点番号ではなく深さ）
-        ql = q_axis(pbs[i] * sin(radians(wt) - radians(lag)), ax);
-    } else if (ty == "prismatic") {
-        float s = pcs[i] > 0 ? (0.5 - 0.5 * cos(radians(360.0 * sp * pcs[i] * T + ph))) : 1.0;
-        ext = lerp(pas[i], pbs[i], s);
-    } else if (ty == "offset") {
-        // 横（X/Y）のずれは「太さ rad = 1」の単位。形（v@scale = rad 倍、テンプレは半径 1）と同じ物差しにそろえる。
-        // こうしておくと rad を変えても、ずれと形の比率が崩れない（Z 方向の len は生の値のまま）
-        off = set(pas[i], pbs[i], 0) * rads[i];
-    } else if (ty == "wheel") {
-        ql = q_axis(din * pas[i], ax);
-    } else if (ty == "head") {
-        float yaw = pas[i] * sin(radians(360.0 * sp * pcs[i] * T + ph));
-        float pit = pbs[i] * sin(radians(360.0 * sp * pcs[i] * T * 0.7 + ph));
-        ql = qmultiply(q_axis(yaw, set(0, 1, 0)), q_axis(pit, set(1, 0, 0)));
-    } else if (ty == "gripper") {
-        // 実装側の追加: 指の開き角（b=1 で sin で自動開閉）。指の造形は detail_pieces が読む
-        oa = pas[i];
-        if (pbs[i] > 0.5) oa = pas[i] * (0.5 + 0.5 * sin(radians(wt)));
-    }
-    // link / fixed / cap / base / foot: ローカル回転なし
-    if (ty == "drill") ql = q_axis(din * pas[i] + 360.0 * sp * T * pas[i], set(0, 0, 1));
-
-    if (dmodes[i] == 2) dout = din * ratios[i];                 // Gear: 変速
-    if (dmodes[i] == 1 && ty != "hinge") dout = 0.0;            // Block: ここで止める
-
-    vector4 fq = compose(pq, ql);                               // 親の向き × 自分の回転
-    vector fp = pp + qrotate(pq, off);
-    fpos[i] = fp;
-    fori[i] = fq;
-    sout_pos[i] = fp + qrotate(fq, set(0, 0, lens[i] + ext));   // 出力ソケット = ローカル +Z に len 先
-    sout_ori[i] = fq;
-    drv[i] = dout;
-    exts[i] = ext;
-    opens[i] = oa;
-}
-
-for (int i = 0; i < n; i++) {
-    setpointattrib(0, "frame_pos", i, fpos[i]);
-    setpointattrib(0, "frame_orient", i, fori[i]);
-    setpointattrib(0, "socket_pos", i, sout_pos[i]);
-    setpointattrib(0, "drive_angle", i, drv[i]);
-    setpointattrib(0, "ext", i, exts[i]);
-    setpointattrib(0, "open_angle", i, opens[i]);
-}
-'''
-
-# ----------------------------------------------------------------------------
-# 3. frame_decompose（Point Wrangle）… 実装パケット §6 v0.3
-# ----------------------------------------------------------------------------
-DECOMPOSE_VEX = r'''// frame_decompose（Point Wrangle）
-// ソルバの答え（frame_pos / frame_orient）を、Copy to Points が読む標準の属性に写すだけです。
-// pscale は使いません。大きさは v@scale（XYZ 別々のスケール）で渡します。
-@P = v@frame_pos;
-@orient = p@frame_orient;
-float r = f@radius;
-if (i@scale_mode == 1) {
-    // 伸びるパーツ（link など）: 太さは rad、長さ（Z）は len + ext
-    float L = f@length + f@ext;
-    v@scale = set(r, r, max(L, 0.001));
-} else {
-    // 固定サイズのパーツ（motor など）: 太さ rad だけで大きさが決まる（len では伸びない）
-    v@scale = set(r, r, r);
-}
-if (i@has_geo == 0) v@scale = set(0, 0, 0);
-s@piece = s@part_type;
-'''
-
-# ----------------------------------------------------------------------------
-# 4. detail_pieces（Point Wrangle）… 実装側の追加（仕様の所有権表は壊さない）
-# ----------------------------------------------------------------------------
-PIECES_VEX = r'''// detail_pieces（Point Wrangle）… 実装側で足した見た目用の部品
-// 1) 固定サイズのパーツ（モーターや関節）は len を伸ばしても形が伸びないので、
-//    次のソケットまでを細い「軸（rod）」でつなぎます。
-// 2) グリッパに指を 2 本足して、ソルバが出した open_angle だけ開きます。
-string NO_ROD[] = {"base", "branch", "cap", "gripper", "drill", "head", "wheel", "foot"};
-if (i@has_geo == 1) {
-    float r = f@radius;
-    float L = f@length + f@ext;
-    vector4 q = p@orient;
-    if (i@scale_mode == 0 && L > r * 1.2 && find(NO_ROD, s@part_type) < 0) {
-        int np = addpoint(0, @ptnum);                 // 今の点の属性をまるごと写した新しい点
-        setpointattrib(0, "piece", np, "rod");
-        setpointattrib(0, "name", np, s@name + "_rod");
-        setpointattrib(0, "scale", np, set(r * 0.45, r * 0.45, L));
-    }
-    if (s@part_type == "gripper") {
-        float oa = f@open_angle;
-        for (int side = -1; side <= 1; side += 2) {
-            int np = addpoint(0, @ptnum);
-            setpointattrib(0, "P", np, @P + qrotate(q, set(0, side * r * 0.55, r * 0.8)));
-            // 指の付け根で X 軸まわりに開く（+Y 側の指は +Y へ、-Y 側の指は -Y へ）
-            setpointattrib(0, "orient", np, qmultiply(q, quaternion(radians(-side * oa), {1, 0, 0})));
-            setpointattrib(0, "piece", np, "finger");
-            setpointattrib(0, "name", np, s@name + (side < 0 ? "_finger_R" : "_finger_L"));
-        }
-    }
-}
-'''
+PARSER_CODE = load_code("recipe_parser.py")
+SOLVER_VEX = load_code("socket_solver.vex")
+DECOMPOSE_VEX = load_code("frame_decompose.vex")
+PIECES_VEX = load_code("detail_pieces.vex")
+VARIANT_CODE = load_code("variant_builder.py")
+CLASSIFY_CODE = load_code("classify_shapes.py")
 
 # ----------------------------------------------------------------------------
 # 5. skeleton_view（Detail Wrangle）… デバッグ表示（OUT_SOCKETS）
@@ -825,8 +392,8 @@ soptoolutils.genericTool(kwargs, '$HDA_NAME')]]></script>
 
 def hda_parm_templates():
     g = hou.ParmTemplateGroup()
-    tokens = ["none"] + [k for k, _, _ in PRESETS]
-    labels = ["（選ぶとレシピ欄を上書きします）"] + ["%s  %s" % (k, t) for k, t, _ in PRESETS]
+    tokens = ["none"] + [k for k, _, _ in PRESETS + ROTARY_PRESETS]
+    labels = ["（選ぶとレシピ欄を上書きします）"] + ["%s  %s" % (k, t) for k, t, _ in PRESETS + ROTARY_PRESETS]
     g.append(hou.MenuParmTemplate(
         "preset", "プリセットを読み込む", tokens, labels, default_value=tokens.index("02"),
         script_callback="hou.phm().load_preset(kwargs)",
@@ -891,6 +458,14 @@ def build_hda():
     # Stage 1.5: ソルバ
     solver = sub.createNode("attribwrangle", "socket_solver")
     solver.setInput(0, parser)
+    # 入力 1 = ベースポイント（根の置き場所）、入力 2 = 形の素材（断面カーブ / 差し替えメッシュ / ターゲット点）
+    ins = sub.indirectInputs()
+    solver.setInput(1, ins[0])
+    classify = sub.createNode("python", "classify_shapes")
+    classify.setInput(0, ins[1])
+    classify.parm("python").set(CLASSIFY_CODE)
+    comment(classify, "第2入力の読み分け\nグループ sections / meshes / targets\nなければ開閉と点で判定")
+    solver.setInput(2, classify)
     solver.parm("class").set("detail")
     solver.parm("snippet").set(SOLVER_VEX)
     comment(solver, "2. socket_solver（Detail Wrangle）\n親の出力ソケットを継いで\nframe / socket を順に計算", (0.95, 0.7, 0.3))
@@ -909,9 +484,17 @@ def build_hda():
     comment(pieces, "（追加）軸 rod とグリッパの指を足す")
 
     tpl = build_templates(sub)
+    variants = sub.createNode("python", "variant_builder")
+    variants.setInput(0, parser)
+    variants.setInput(1, classify)
+    variants.parm("python").set(VARIANT_CODE)
+    comment(variants, "4b. 回転系の形のバリアント\ngeo_id ごとに 1 回だけ作る\n（パーサの出力から = 時間で変わらない）", (0.6, 0.85, 0.6))
+    lib = sub.createNode("merge", "all_templates")
+    lib.setInput(0, tpl)
+    lib.setInput(1, variants)
 
     copy = sub.createNode("copytopoints", "copy_parts")
-    copy.setInput(0, tpl)
+    copy.setInput(0, lib)
     copy.setInput(1, pieces)
     sp(copy, "useidattrib", 1)
     sp(copy, "idattrib", "piece")
@@ -954,10 +537,14 @@ def build_hda():
 
     node = sub.createDigitalAsset(
         name=HDA_TYPE, hda_file_name=HDA_PATH, description="汎用メカチェーン",
-        min_num_inputs=0, max_num_inputs=0, ignore_external_references=True)
+        min_num_inputs=0, max_num_inputs=2, ignore_external_references=True)
     d = node.type().definition()
     d.setParmTemplateGroup(hda_parm_templates())
     node.removeSpareParms()
+    sec = d.sections()["DialogScript"]
+    sec.setContents(sec.contents()
+                    .replace('inputlabel\t1\t"Sub-Network Input #1"', 'inputlabel\t1\t"Base Points (optional)"')
+                    .replace('inputlabel\t2\t"Sub-Network Input #2"', 'inputlabel\t2\t"Shapes: sections / meshes / targets"'))
     try:
         d.setMaxNumOutputs(2)
     except AttributeError:
@@ -1028,13 +615,17 @@ VAT_NOTE = """VAT（剛体モード）で書き出す
 """
 
 
-def build_vat_object():
-    """レシピ02 を VAT（剛体モード）で書き出すためのオブジェクトと ROP"""
-    obj = hou.node("/obj").createNode("geo", "vat_recipe02")
-    obj.parmTuple("t").set((0, 0, -12))
+VAT_TARGETS = [("vat_recipe02", "02", (0, 0, -12)),       # Phase1 の合格ライン
+               ("vat_rotary", "C1", (14, 0, -12))]        # 回転系: 遊星ギア → 同軸スタック（housing / rotor 分割つき）
+
+
+def build_vat_object(name="vat_recipe02", key="02", t=(0, 0, -12)):
+    """レシピを VAT（剛体モード）で書き出すためのオブジェクトと ROP"""
+    obj = hou.node("/obj").createNode("geo", name)
+    obj.parmTuple("t").set(t)
     m = obj.createNode(HDA_TYPE, "mecha_chain1")
-    m.parm("recipe").set(RECIPES["02"])
-    m.parm("preset").set("02")
+    m.parm("recipe").set(RECIPES[key])
+    m.parm("preset").set(key)
     rest = obj.createNode("timeshift", "first_frame")
     rest.setInput(0, m)
     rest.parm("frame").deleteAllKeyframes()
@@ -1051,10 +642,10 @@ def build_vat_object():
     out.setDisplayFlag(True)
     out.setRenderFlag(True)
     obj.layoutChildren()
-    obj.setComment("VAT 書き出し用（レシピ02）")
+    obj.setComment("VAT 書き出し用（レシピ %s）" % key)
     obj.setGenericFlag(hou.nodeFlag.DisplayComment, True)
     try:
-        rop = hou.node("/out").createNode("labs::vertex_animation_textures::3.0", "vat_recipe02")
+        rop = hou.node("/out").createNode("labs::vertex_animation_textures::3.0", name)
     except hou.OperationFailed:
         print("WARN SideFX Labs の VAT ROP が見つからないので ROP は作りません")
         return None
@@ -1066,15 +657,15 @@ def build_vat_object():
     rop.parmTuple("f").set((1, FRAME_END))             # VAT ROP 3.0 の f は（開始, 終了）の 2 つ
     rop.parm("slerpmode").set(1)                        # 角速度 w を使わない回転補間
     rop.parm("exportpath").set("$HIP/export")
-    rop.parm("assetname").set("mecha_recipe02")
+    rop.parm("assetname").set("mecha_recipe02" if key == "02" else "mecha_" + key)
     return rop
 
 
 def export_vat():
-    rop = hou.node("/out/vat_recipe02")
-    if rop is None:
-        return
-    rop.hm().cookAndRender(rop)
+    for name, _, _ in VAT_TARGETS:
+        rop = hou.node("/out/" + name)
+        if rop is not None:
+            rop.hm().cookAndRender(rop)
     for root, _, files in os.walk(TOOL_DIR + "/export"):
         for fn in files:
             p = os.path.join(root, fn)
@@ -1121,7 +712,10 @@ def build_sample():
     make_mecha("test_bent_double", BENT_DOUBLE, (-24, 0, 0), skeleton=True, label="bent テスト（2 回）")
     for i, (key, title, recipe) in enumerate(PRESETS):
         make_mecha("preset%s" % key, recipe, gallery_pos(i), label="%s %s" % (key, title))
-    build_vat_object()
+    for i, (key, title, recipe) in enumerate(ROTARY_PRESETS):
+        make_mecha("rotary%s" % key, recipe, (-30 - (i % 5) * 9.0, 0, (i // 5) * 14.0), label="%s %s" % (key, title))
+    for name, key, t in VAT_TARGETS:
+        build_vat_object(name, key, t)
     obj = hou.node("/obj")
     obj.layoutChildren()
     sticky(PLAYGROUND_NOTE, (-12, 3), (9, 4.5))
@@ -1182,10 +776,17 @@ def chain_state(m, frame):
     pb = g.pointFloatAttribValues("pb")
     drv = g.pointFloatAttribValues("drive_angle")
     rad = g.pointFloatAttribValues("radius")
+    pe = g.pointFloatAttribValues("pe")
+    pf = g.pointFloatAttribValues("pf")
+    gid = g.pointStringAttribValues("geo_id")
+    lock = g.pointFloatAttribValues("lock_fade")
+    axis = g.pointIntAttribValues("axis")
+    internal = g.pointIntAttribValues("internal")
     parts = []
     for i in range(n):
         parts.append(dict(fp=fp[i], fo=fo[i], sp=sp_[i], parent=par[i], type=ty[i], len=ln[i],
-                          ext=ex[i], pa=pa[i], pb=pb[i], drive=drv[i], rad=rad[i]))
+                          ext=ex[i], pa=pa[i], pb=pb[i], drive=drv[i], rad=rad[i], pe=pe[i], pf=pf[i],
+                          gid=gid[i], lock=lock[i], axis=axis[i], internal=internal[i]))
     return parts
 
 
@@ -1204,11 +805,16 @@ def invariant_errors(parts):
             return float("inf")
         worst = max(worst, abs(vlen(p["fo"]) - 1.0))
         worst = max(worst, abs(vlen(vsub(p["sp"], p["fp"])) - (p["len"] + p["ext"])))
-        if p["parent"] >= 0:
+        if p["parent"] >= 0 and p["type"] not in ("crank_rod", "crank_slider"):
             par = parts[p["parent"]]
             off = (p["pa"] * p["rad"], p["pb"] * p["rad"], 0.0) if p["type"] == "offset" else (0.0, 0.0, 0.0)
             expect = tuple(a + b for a, b in zip(par["sp"], qrot(par["fo"], off)))
             worst = max(worst, vlen(vsub(p["fp"], expect)))
+        if p["type"] == "crank_slider":
+            # クランク: ロッドの先 = スライダのソケット（ロッドとスライダが一瞬も離れない）
+            rods = [q for q in parts if q["type"] == "crank_rod" and q["parent"] == int(p["pf"])
+                    and abs(q["pe"] - p["pe"]) < 1e-6]
+            worst = max(worst, vlen(vsub(rods[0]["sp"], p["sp"])) if rods else float("inf"))
     return worst
 
 
@@ -1238,6 +844,351 @@ def parser_errors(m, recipe):
     except hou.OperationFailed:
         pass
     return parser.errors()
+
+
+def z_angle(qa, qb):
+    """qb が qa から見て Z 軸まわりに何度回っているか（-180〜180）"""
+    return signed_angle(qmul(qconj(qa), qb), 2)
+
+
+def frac_dist(x):
+    """整数からのずれ（0〜0.5）"""
+    return abs(x - round(x))
+
+
+def poly_inside(pt, poly):
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def poly_dist(pt, poly):
+    best = 1e9
+    n = len(poly)
+    for i in range(n):
+        ax, ay = poly[i]
+        bx, by = poly[(i + 1) % n]
+        dx, dy = bx - ax, by - ay
+        t = max(0.0, min(1.0, ((pt[0] - ax) * dx + (pt[1] - ay) * dy) / ((dx * dx + dy * dy) or 1e-12)))
+        best = min(best, math.hypot(pt[0] - ax - t * dx, pt[1] - ay - t * dy))
+    return best
+
+
+def gear_outline_of(vb, gid_prefix, r_lo, r_hi):
+    """バリアントの歯車（パック済み）から、z = 0 の歯の輪郭を角度順に取り出す"""
+    for pr in vb.prims():
+        if pr.attribValue("piece").startswith(gid_prefix) and pr.attribValue("piece").endswith("_rotor"):
+            g = pr.getEmbeddedGeometry()
+            pts = []
+            for p in g.points():
+                q = p.position()
+                rr = math.hypot(q[0], q[1])
+                if abs(q[2]) < 1e-6 and r_lo - 1e-6 <= rr <= r_hi + 1e-6:
+                    pts.append((math.atan2(q[1], q[0]), q[0], q[1]))
+            pts.sort()
+            out = []
+            for a, x, y in pts:
+                if not out or math.hypot(x - out[-1][0], y - out[-1][1]) > 1e-7:
+                    out.append((x, y))
+            return out
+    return []
+
+
+def verify_rotary(c, m):
+    """回転系 5 種（仕様 v0.5）の合格条件と、精査メモで「実装が入ったら見る」とされた点"""
+    def load(recipe):
+        errs = parser_errors(m, recipe)
+        return errs
+
+    def geo_attr(name, frame=1):
+        g = m.node("socket_solver").geometryAtFrame(frame)
+        a = g.findPointAttrib(name)
+        return list(g.pointFloatAttribValues(name)) if a is not None else []
+
+    # ---- 文法 v1.2
+    parser_errors(m, "base > motor_rot(speeed=0.5) > cap")
+    warns = m.node("recipe_parser").warnings()
+    c.check(any("speeed" in w for w in warns), "v1.2: 綴り間違いのキー（speeed=0.5）は黙って飲まずに警告",
+            warns[0].splitlines()[-1][:60] if warns else "警告が出ない")
+    errs = load("base > link(len=[1,2]) > cap")
+    c.check(bool(errs), "v1.2: 原始パーツにリストを書くとエラー", errs[0].splitlines()[-1][:60] if errs else "")
+    errs = load("base > coax(layers=3, ratio=[1, -0.8, 0.5], form=[disc, ring, gear]) > cap")
+    c.check(not errs, "v1.2: 括弧の中のカンマと文字列（form=[disc, ring, gear]）を読める", errs[0] if errs else "")
+
+    # ---- internal 子の合格条件（§9.2）: 本線は internal 子ではなく親パーツのソケットにつながる
+    bad = []
+    for key in ("R1", "R2", "R3", "R4", "R5", "C1", "C3", "C5"):
+        load(RECIPES[key])
+        st = chain_state(m, 1)
+        for p in st:
+            if p["internal"] == 0 and p["parent"] >= 0 and st[p["parent"]]["internal"] == 1:
+                bad.append(key)
+    c.check(not bad, "internal 子: 本線のパーツは internal 子（遊星・ロッドなど）にぶら下がらない",
+            "OK" if not bad else ", ".join(sorted(set(bad))))
+
+    # ---- 上限の内訳（§9.3）
+    errs = load("base" + " > coax(layers=16)" * 16)
+    msg = errs[0].splitlines()[-1] if errs else ""
+    c.check(bool(errs) and "coax(#2): 17 個" in msg, "上限 256: エラーの内訳だけで原因のパーツが分かる", msg[:90])
+    load("base" + " > coax(layers=16)" * 13)
+    warns = m.node("recipe_parser").warnings()
+    c.check(any("内訳" in w for w in warns), "上限の 80%（205 個）で内訳つきの警告",
+            next((w.splitlines()[-1][:70] for w in warns if "内訳" in w), "警告が出ない"))
+    errs = load("base" + "".join(" > coax(layers=1, form=gear, teeth=%d)" % (10 + i) for i in range(33)))
+    c.check(bool(errs) and "形の種類" in errs[0], "形のバリアントは 32 まで（33 でエラー）",
+            errs[0].splitlines()[-1][:60] if errs else "エラーが出ない")
+
+    # ---- R-01 同軸スタック
+    ok_all, detail = True, []
+    for mode in ("cumulative", "independent"):
+        for nl in range(2, 7):
+            load("base > coax(layers=%d, stack_mode=%s) > link(len=0.5) > cap" % (nl, mode))
+            a1, a2 = chain_state(m, 1), chain_state(m, 2)
+            layers = [i for i, p in enumerate(a1) if p["gid"].startswith("layer_")]
+            base_q = a1[0]["fo"]
+            w = [(z_angle(base_q, a2[i]["fo"]) - z_angle(base_q, a1[i]["fo"]) + 540.0) % 360.0 - 180.0 for i in layers]
+            distinct = len(layers) == nl and all(abs(x - y) > 1e-3 for k, x in enumerate(w) for y in w[k + 1:])
+            ok_all = ok_all and distinct
+            if nl == 6:
+                detail.append("%s 6 層: %s °/フレーム" % (mode, ", ".join("%.1f" % x for x in w)))
+    c.check(ok_all, "R-01: layers を 2→6 に変えるだけで、全層が別の速さで回る（2 モードとも）", " / ".join(detail))
+    load("base > coax(layers=3, ratio=[1,-0.5,2], phase_list=[0,30,60], stack_mode=independent, speed=0.5) > cap")
+    T = (37 - 1) / 24.0
+    st = chain_state(m, 37)
+    layers = [i for i, p in enumerate(st) if p["gid"].startswith("layer_")]
+    got = [z_angle(st[0]["fo"], st[i]["fo"]) for i in layers]
+    exp = [((360 * 0.5 * r * T + ph) + 180) % 360 - 180 for r, ph in ((1, 0), (-0.5, 30), (2, 60))]
+    c.check(all(abs(((g_ - e) + 180) % 360 - 180) < 1e-3 for g_, e in zip(got, exp)),
+            "R-01 independent: 各層の角度 = drive × ratio + phase（親に運ばれない）",
+            "層の角度 %s（期待 %s）" % (", ".join("%.1f" % x for x in got), ", ".join("%.1f" % x for x in exp)))
+    load("base > coax(layers=4, form=disc) > cap")
+    gids = sorted(set(p["gid"] for p in chain_state(m, 1) if p["gid"].startswith("layer_")))
+    load("base > coax(layers=4, form=[disc,blades,gear,ring]) > cap")
+    gids4 = sorted(set(p["gid"] for p in chain_state(m, 1) if p["gid"].startswith("layer_")))
+    c.check(len(gids) == 1 and len(gids4) == 4, "R-01: 全層が同じ形なら geo_id は 1 つに集約（形を変えると 4 つ）",
+            "%s / %s" % (gids[0], ", ".join(gids4)))
+    load("base > coax(layers=4, radius_step=0.7) > link(len=0.5) > cap")
+    st = chain_state(m, 1)
+    rr = [round(p["rad"], 4) for p in st]
+    c.check(abs(st[-2]["rad"] - 0.15) < 1e-6 and min(rr) < 0.06,
+            "R-01: radius_step で段々にした太さは、出力ソケットで元に戻る（下流の link は 0.15 のまま）",
+            "太さ %s" % rr)
+
+    # ---- R-02 遊星ギア
+    vb_lines = []
+    ok_mesh, ok_geo, ok_ratio, worst_pen, wrong_pen = True, True, True, 0.0, 0.0
+    for S, N, extra in ((12, 3, ""), (10, 4, ""), (9, 3, ""), (13, 5, ""), (12, 3, ", tooth_profile=0"),
+                        (12, 3, ", output=ring"), (12, 3, ", helical_angle=20")):
+        errs = load("base > planetary(sun_teeth=%d, planet_count=%d, speed=0.7%s) > link(len=0.5) > cap" % (S, N, extra))
+        if errs:
+            c.check(False, "R-02: S=%d N=%d%s" % (S, N, extra), errs[0])
+            continue
+        g = m.node("socket_solver").geometryAtFrame(1)
+        teeth = g.pointFloatAttribValues("geo_teeth")
+        mod = g.pointFloatAttribValues("geo_module")
+        st1 = chain_state(m, 1)
+        idx = lambda pre: [i for i, p in enumerate(st1) if p["gid"].startswith(pre)]
+        ib, isun, iring, icar = idx("pgcase")[0], idx("pgsun")[0], idx("pgring")[0], idx("pgcarrier")[0]
+        ipl = idx("pgplanet")
+        Sz, Rz, Pz = int(teeth[isun]), int(teeth[iring]), int(teeth[ipl[0]])
+        mm = mod[isun]
+        planet_gids = set(st1[i]["gid"] for i in ipl)
+        ok_geo = ok_geo and len(planet_gids) == 1 and len(ipl) == N
+        # 減速比（リング固定ならキャリア = 太陽 × S / (R+S)）
+        st2 = chain_state(m, 2)
+        ws = z_angle(st1[ib]["fo"], st2[isun]["fo"]) - z_angle(st1[ib]["fo"], st1[isun]["fo"])
+        wc = z_angle(st1[ib]["fo"], st2[icar]["fo"]) - z_angle(st1[ib]["fo"], st1[icar]["fo"])
+        wr = z_angle(st1[ib]["fo"], st2[iring]["fo"]) - z_angle(st1[ib]["fo"], st1[iring]["fo"])
+        if "ring" in extra:
+            ok_ratio = ok_ratio and abs(wc) < 1e-6 and abs(wr - (-ws * Sz / float(Rz))) < 1e-4
+        else:
+            ok_ratio = ok_ratio and abs(wr) < 1e-6 and abs(wc - ws * Sz / float(Sz + Rz)) < 1e-4
+        # 噛み合い位相（歯と歯溝が向き合っているか）
+        vb = m.node("variant_builder").geometry()
+        rp = lambda z: z * mm / 2.0
+        sun_o = gear_outline_of(vb, "pgsun", rp(Sz) - 1.25 * mm, rp(Sz) + mm)
+        pl_o = gear_outline_of(vb, "pgplanet", rp(Pz) - 1.25 * mm, rp(Pz) + mm)
+        ring_o = gear_outline_of(vb, "pgring", rp(Rz) - mm, rp(Rz) + 1.25 * mm)
+        for f in (1, 17, 41, 73):
+            st = chain_state(m, f)
+            qb, pb_ = st[ib]["fo"], st[ib]["fp"]
+            rad = st[ib]["rad"]
+            ts = z_angle(qb, st[isun]["fo"])
+            tr = z_angle(qb, st[iring]["fo"])
+            for i in ipl:
+                rel = qrot(qconj(qb), vsub(st[i]["fp"], pb_))
+                gam = math.degrees(math.atan2(rel[1], rel[0]))
+                tp = z_angle(qb, st[i]["fo"])
+                us = (gam - ts) * Sz / 360.0
+                up = (gam + 180.0 - tp) * Pz / 360.0
+                ur = (gam - tr) * Rz / 360.0
+                up2 = (gam - tp) * Pz / 360.0
+                ok_mesh = ok_mesh and frac_dist(us + up - 0.5) < 1e-3 and frac_dist(ur - up2 - 0.5) < 1e-3
+                # 形でも確かめる: 遊星の歯の輪郭が、太陽とリングにめり込んでいないか（めり込み量 / モジュール）
+                cx, cy = rel[0] / rad, rel[1] / rad
+                for wrong in (0.0, 180.0 / Pz):
+                    a = math.radians(tp + wrong)
+                    sa = math.radians(ts)
+                    ra = math.radians(tr)
+                    pen = 0.0
+                    for x, y in pl_o[::2]:
+                        px = cx + x * math.cos(a) - y * math.sin(a)
+                        py = cy + x * math.sin(a) + y * math.cos(a)
+                        qx, qy = px * math.cos(-sa) - py * math.sin(-sa), px * math.sin(-sa) + py * math.cos(-sa)
+                        if poly_inside((qx, qy), sun_o):
+                            pen = max(pen, poly_dist((qx, qy), sun_o))
+                        qx, qy = px * math.cos(-ra) - py * math.sin(-ra), px * math.sin(-ra) + py * math.cos(-ra)
+                        if not poly_inside((qx, qy), ring_o):
+                            pen = max(pen, poly_dist((qx, qy), ring_o))
+                    if wrong == 0.0:
+                        worst_pen = max(worst_pen, pen / mm)
+                    else:
+                        wrong_pen = max(wrong_pen, pen / mm)
+        vb_lines.append("S%d P%d R%d N%d%s" % (Sz, Pz, Rz, N, extra.replace(", ", " ")))
+    c.check(ok_geo, "R-02: 遊星は全部で 1 つの geo_id（等間隔配置の条件が満たされている証拠）", " / ".join(vb_lines))
+    c.check(ok_ratio, "R-02: 減速比どおりに回る（キャリア = 太陽 × S/(R+S)、リング出力は −S/R）")
+    c.check(ok_mesh, "R-02: 噛み合い位相 — どの遊星も、太陽とリングに対して歯と歯溝が向き合う（4 フレームで確認）")
+    c.check(worst_pen < 0.1 and wrong_pen > 0.3,
+            "R-02: 歯がめり込まない（輪郭どうしの重なりで確認）",
+            "めり込み最大 %.3f × モジュール（わざと半ピッチずらすと %.2f × モジュール）" % (worst_pen, wrong_pen))
+    load("base > planetary(sun_teeth=12, planet_count=3, planet_teeth=13) > cap")
+    warns = m.node("recipe_parser").warnings()
+    c.check(any("planet_teeth" in w for w in warns), "R-02: 等間隔に置けない歯数は自動で寄せて警告",
+            next((w.splitlines()[-1][:60] for w in warns if "planet_teeth" in w), ""))
+
+    # ---- R-03 ジンバル
+    up_motion = "base > motor_osc(axis=0, b=35, speed=0.35) > hinge(axis=1, b=30, c=0.45) > link(len=0.5) > "
+    ok_stab, ok_axis, worst_ang = True, True, 0.0
+    for order in ("zxy", "zyx", "xyz", "xzy", "yxz", "yzx"):
+        load(up_motion + "gimbal(mode=stabilize, axis_order=%s, angle_list=[0,0,0]) > cap" % order)
+        for f in range(1, FRAME_END + 1, 7):
+            st = chain_state(m, f)
+            frames = [i for i, p in enumerate(st) if p["type"] == "gimbal_frame"]
+            pay = frames[-1] + 1
+            dq = st[pay]["fo"]
+            ang = math.degrees(2 * math.asin(min(1.0, vlen(dq[:3]))))   # acos(w) は w≈1 で誤差が大きいので使わない
+            worst_ang = max(worst_ang, ang)
+            for i in frames:
+                lq = local_q(st, i)
+                ax_i = st[i]["axis"]
+                others = [abs(lq[k]) for k in range(3) if k != ax_i]
+                ok_axis = ok_axis and max(others) < 1e-5
+    c.check(worst_ang < 0.01, "R-03 stabilize: 上流を揺らしてもペイロードのワールドの向きが変わらない（軸順 6 通り）",
+            "向きのずれ最大 %.4f°" % worst_ang)
+    c.check(ok_axis, "R-03: 各リングの回転は自分の軸まわりだけ（軸受から外れない）")
+    load("base > hinge(axis=0, a=85) > gimbal(mode=stabilize, axis_order=zxy) > cap")
+    st = chain_state(m, 1)
+    lk = max(p["lock"] for p in st)
+    load("base > hinge(axis=0, a=60) > gimbal(mode=stabilize, axis_order=zxy) > cap")
+    lk2 = max(p["lock"] for p in chain_state(m, 1))
+    c.check(0.2 < lk < 0.8 and lk2 == 0.0,
+            "R-03: ジンバルロック近く（中の角 85°）では補正をフェード（状態を持たない）",
+            "85°: フェード %.2f / 60°: %.2f" % (lk, lk2))
+    errs = load("base > gimbal(mode=stabilize, axis_enable=[1,0,1]) > cap")
+    warns = m.node("recipe_parser").warnings()
+    c.check(not errs and any("無効な軸" in w for w in warns), "R-03: 2 軸の stabilize はエラーにせず、残りの軸は成り行き（警告あり）")
+    # track: リストの座標と、第2入力の点の 2 通り
+    load("base > motor_osc(axis=1, b=30, speed=0.4) > link(len=0.6) > gimbal(mode=track, target=[3,2,6]) > cap")
+    worst_t = 0.0
+    for f in range(1, FRAME_END + 1, 9):
+        st = chain_state(m, f)
+        frames = [i for i, p in enumerate(st) if p["type"] == "gimbal_frame"]
+        pay = frames[-1] + 1
+        d = unit3(vsub((3.0, 2.0, 6.0), st[frames[0]]["fp"]))
+        fwd = qrot(st[pay]["fo"], (0.0, 0.0, 1.0))
+        worst_t = max(worst_t, math.degrees(math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(d, fwd)))))))
+    tgt = m.parent().createNode("add", "track_target")
+    tgt.parm("points").set(1)
+    tgt.parmTuple("pt0").set((-2.0, 1.5, 5.0))
+    m.setInput(1, tgt)
+    load("base > link(len=0.6) > gimbal(mode=track, target=0) > cap")
+    st = chain_state(m, 1)
+    frames = [i for i, p in enumerate(st) if p["type"] == "gimbal_frame"]
+    d = unit3(vsub((-2.0, 1.5, 5.0), st[frames[0]]["fp"]))
+    fwd = qrot(st[frames[-1] + 1]["fo"], (0.0, 0.0, 1.0))
+    a_in = math.degrees(math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(d, fwd))))))
+    m.setInput(1, None)
+    tgt.destroy()
+    c.check(worst_t < 0.01 and a_in < 0.01, "R-03 track: ペイロードの +Z が目標点を向く（座標指定 / 第2入力の点）",
+            "ずれ最大 %.4f° / %.4f°" % (worst_t, a_in))
+
+    # ---- R-04 クランク
+    def stroke(e, L, cc, extra=""):
+        load("base > crank(eccentric=%g, rod_len=%g, guide_offset=%g, speed=0.25%s) > cap" % (e, L, cc, extra))
+        exts = []
+        for k in range(360):
+            f = 1.0 + 96.0 * k / 360.0
+            st = chain_state(m, f)
+            sl = [p for p in st if p["type"] == "crank_slider" and p["internal"] == 0][0]
+            exts.append(sl["ext"])
+        return (max(exts) - min(exts)) / 0.15
+    res = []
+    ok = True
+    for e, L, cc in ((0.5, 3.0, 0.0), (0.8, 3.0, 0.0), (1.2, 3.0, 0.0), (0.8, 3.0, 0.6), (1.0, 2.5, 1.0)):
+        got = stroke(e, L, cc)
+        exp = 2 * e if cc == 0 else math.sqrt((L + e) ** 2 - cc * cc) - math.sqrt((L - e) ** 2 - cc * cc)
+        ok = ok and abs(got - exp) < 2e-3
+        res.append("e%g c%g: %.3f（式 %.3f）" % (e, cc, got, exp))
+    c.check(ok, "R-04: eccentric を変えるだけでストロークが追従（c=0 で 2e、c≠0 でオフセット版の式）", " / ".join(res))
+    worst_r = 0.0
+    for extra in ("", ", pin_count=2, pin_phase_list=[0,90]", ", pin_count=3"):
+        load("base > crank(eccentric=0.9, rod_len=3.2, guide_offset=0.4, speed=0.5%s) > link(len=0.4) > cap" % extra)
+        for f in range(1, FRAME_END + 1, 3):
+            st = chain_state(m, f)
+            worst_r = max(worst_r, invariant_errors(st))
+            for p in st:
+                if p["type"] == "crank_rod":
+                    wheel = st[p["parent"]]
+                    worst_r = max(worst_r, abs(vlen(vsub(p["fp"], wheel["fp"])) - 0.9 * 0.15))
+    c.check(worst_r < 1e-5, "R-04: ロッドの両端がピンとスライダから一瞬も離れない（1〜3 ピン、96 フレーム）",
+            "ずれ最大 %.1e" % worst_r)
+    errs = load("base > crank(eccentric=1, rod_len=2, guide_offset=1.2) > cap")
+    c.check(bool(errs) and "成立条件" in errs[0], "R-04: 成立条件 c < L − r を満たさない値はエラー",
+            errs[0].splitlines()[-1][:60] if errs else "")
+
+    # ---- R-05 タービン
+    ok_b, lines = True, []
+    for n, tr, tt in ((3, 20, 10), (5, 45, 15), (8, 70, 30), (12, 10, 5), (12, 60, 40)):
+        load("base > turbine(blade_count=%d, twist_root=%g, twist_tip=%g, hub_form=cyl) > cap" % (n, tr, tt))
+        vb = m.node("variant_builder").geometry()
+        bl = [p for p in vb.prims() if p.attribValue("piece").endswith("_blade")][0].getEmbeddedGeometry()
+        hub = [p for p in vb.prims() if p.attribValue("piece").startswith("turbine") and
+               p.attribValue("piece").endswith("_rotor")][0].getEmbeddedGeometry()
+        pts = [p.position() for p in bl.points()]
+        half = max(abs(math.atan2(p[1], p[0])) for p in pts)
+        xmin = min(p[0] for p in pts)
+        root = [p for p in pts if abs(p[0] - xmin) < 1e-6]
+        top = hub.boundingBox().maxvec()[2]
+        embedded = all(math.hypot(p[0], p[1]) <= 1.0 + 1e-6 and -1e-6 <= p[2] <= top + 1e-6 for p in root)
+        ok_b = ok_b and half < math.pi / n and embedded
+        lines.append("%d 枚 %g→%g°: 角度の幅 %.0f%%%s" % (n, tr, tt, 100 * half / (math.pi / n), "" if embedded else " 根元が出る"))
+    c.check(ok_b, "R-05: blade_count と twist を変えても、羽根どうしが干渉せず根元はハブに埋まる",
+            " / ".join(lines))
+    load(RECIPES["R5"])
+    p1 = [p for p in m.node("detail_pieces").geometryAtFrame(1).points() if p.attribValue("piece").endswith("_blade")]
+    p2 = [p for p in m.node("detail_pieces").geometryAtFrame(9).points() if p.attribValue("piece").endswith("_blade")]
+    c.check(len(p1) == 5 and vlen(vsub(p1[0].attribValue("orient"), p2[0].attribValue("orient"))) > 1e-3,
+            "R-05: 羽根 5 枚が並び、全体が回る（pitch_anim で羽根の角度も変わる）")
+
+    # ---- 状態を持たない（直前フレームを読まない）
+    load(RECIPES["C1"])
+    a = chain_state(m, 50)
+    chain_state(m, 90)
+    chain_state(m, 3)
+    b = chain_state(m, 50)
+    c.check(all(vlen(vsub(x["fp"], y["fp"])) < 1e-9 for x, y in zip(a, b)),
+            "ステートレス: どのフレームから計算しても同じ答え（スクラブ可・VAT の 1 フレーム目基準と両立）")
+
+
+def unit3(v):
+    n = vlen(v) or 1e-9
+    return tuple(x / n for x in v)
 
 
 def verify():
@@ -1335,7 +1286,7 @@ def verify():
                  " > splitter(a=2, b=40) [ gripper(b=1) | motor_osc(b=30) > drill ]"),
                 ("02 途中から太く", RECIPES["02"].replace("link(len=1.2)", "link(len=1.2, rad=0.25)"))]
     frames = list(range(1, FRAME_END + 1, 5))
-    for label, recipe in [("%s %s" % (k, t_), r) for k, t_, r in PRESETS] + variants:
+    for label, recipe in [("%s %s" % (k, t_), r) for k, t_, r in PRESETS + ROTARY_PRESETS] + variants:
         errs = parser_errors(m, recipe)
         if errs:
             c.check(False, "動く: " + label, errs[0])
@@ -1346,10 +1297,19 @@ def verify():
             st = chain_state(m, f)
             worst = max(worst, invariant_errors(st))
             moved = max(moved, max(vlen(vsub(a["sp"], b["sp"])) for a, b in zip(st, first)))
-        m.node("copy_parts").geometryAtFrame(1)
-        sop_err = m.node("copy_parts").errors() or m.node("socket_solver").errors()
-        c.check(worst < 1e-4 and not sop_err, "動く: " + label,
-                "パーツ %d 個, ソケット契約のずれ最大 %.1e, 先端の移動 最大 %.2f" % (len(first), worst, moved))
+        cg = m.node("copy_parts").geometryAtFrame(1)
+        sop_err = [e for nn in ("copy_parts", "socket_solver", "variant_builder", "frame_decompose", "detail_pieces")
+                   for e in m.node(nn).errors()]
+        # 形が消えていないか: 置くべき点（piece がテンプレートにある点）の数 = 置かれたパーツの数
+        libp = set(m.node("all_templates").geometry().primStringAttribValues("piece"))
+        pts = m.node("detail_pieces").geometryAtFrame(1)
+        want = [p for p in pts.points() if p.attribValue("scale") != (0.0, 0.0, 0.0)]
+        miss = sorted(set(p.attribValue("piece") for p in want if p.attribValue("piece") not in libp))
+        c.check(worst < 1e-4 and not sop_err and not miss and len(cg.prims()) == len(want), "動く: " + label,
+                "パーツ %d 個 / 置いた形 %d 個, ソケット契約のずれ最大 %.1e, 先端の移動 最大 %.2f%s%s" % (
+                    len(first), len(cg.prims()), worst, moved,
+                    (" / 形が無い piece: " + ", ".join(miss[:3])) if miss else "",
+                    (" / " + sop_err[0][:80]) if sop_err else ""))
 
     # --- 4. ソルバの個別確認（チェックリスト A2）
     m.parm("recipe").set(RECIPES["02"])
@@ -1468,15 +1428,19 @@ def verify():
     m.hdaModule().load_preset({"node": m, "script_value": "11"})
     c.check(m.evalParm("recipe") == RECIPES["11"], "プリセットメニュー: 選ぶとレシピ欄が入れ替わる")
 
-    # --- 6. VAT（剛体モード）の下ごしらえ
-    vat = hou.node("/obj/vat_recipe02")
-    if vat is not None:
+    # --- 回転系 5 種
+    verify_rotary(c, m)
+
+    # --- 6. VAT（剛体モード）の下ごしらえ（レシピ02 と、回転系の見本）
+    for vat in [hou.node("/obj/" + nm) for nm, _, _ in VAT_TARGETS]:
+      if vat is not None:
         out = vat.node("OUT_VAT")
         g1 = out.geometryAtFrame(1)
         qs = g1.pointFloatAttribValues("orient")
         ident = max(abs(abs(qs[i * 4 + 3]) - 1.0) for i in range(len(qs) // 4))
         c.check(ident < 1e-5 and g1.findPointAttrib("pivot") is not None,
-                "VAT: 1 フレーム目は全パーツが回転なし（orient = 単位）、pivot あり", "%d パーツ" % (len(qs) // 4))
+                "VAT %s: 1 フレーム目は全パーツが回転なし（orient = 単位）、pivot あり" % vat.name(),
+                "%d パーツ" % (len(qs) // 4))
         tmp = []
         ts = vat.createNode("timeshift")
         ts.setInput(0, out)
@@ -1502,7 +1466,7 @@ def verify():
             a = rec.geometryAtFrame(f).pointFloatAttribValues("P")
             b = truth.geometryAtFrame(f).pointFloatAttribValues("P")
             worst = max(worst, max(abs(x - y) for x, y in zip(a, b)) if len(a) == len(b) and a else float("inf"))
-        c.check(worst < 1e-4, "VAT: 1 フレーム目の形を pivot まわりに orient だけ回して P へ動かすと、どのフレームの形とも一致",
+        c.check(worst < 1e-4, "VAT %s: 1 フレーム目の形を pivot まわりに orient だけ回して P へ動かすと、どのフレームの形とも一致" % vat.name(),
                 "頂点のずれ最大 %.1e（5 フレームで比較）" % worst)
         for n_ in tmp:
             n_.destroy()
