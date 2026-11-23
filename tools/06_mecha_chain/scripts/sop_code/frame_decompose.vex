@@ -1,0 +1,44 @@
+// frame_decompose（Point Wrangle）
+// ソルバの答え（frame_pos / frame_orient）を、Copy to Points が読む標準の属性に写します。
+// pscale は使わず、大きさは v@scale（XYZ 別々）で渡します。
+// 回転系パーツ（geo_id あり）は、形が「回らない側 _housing」と「回る側 _rotor」の 2 個に分かれているので、
+// 点を複製して、元の点に geo_id + "_housing"、複製した点に geo_id + "_rotor" を書きます（仕様 v0.5 §0.3）。
+// ※ piece がテンプレートと一致しないと Copy to Points は何も置かない（形が消える）ので、接尾辞は必ず両側に付けます。
+@P = v@frame_pos;
+@orient = p@frame_orient;
+float r = f@radius;
+if (i@scale_mode == 1) {
+    float L = f@length + f@ext;
+    v@scale = set(r, r, max(L, 0.001));
+} else {
+    v@scale = set(r, r, r);
+}
+if (i@has_geo == 0) v@scale = set(0, 0, 0);
+
+string gid = s@geo_id;
+if (gid == "") {
+    s@piece = s@part_type;          // Phase1 のパーツ: 形の名前 = パーツ名
+} else {
+    int hs = i@piece_housing;
+    int ro = i@piece_rotor;
+    vector rotor_p = i@rotor_at_socket ? v@socket_pos : v@frame_pos;
+    if (hs && ro) {
+        s@piece = gid + "_housing";
+        @orient = p@housing_orient;
+        int np = addpoint(0, @ptnum);
+        setpointattrib(0, "P", np, rotor_p);
+        setpointattrib(0, "orient", np, p@frame_orient);
+        setpointattrib(0, "scale", np, v@scale);
+        setpointattrib(0, "piece", np, gid + "_rotor");
+        setpointattrib(0, "name", np, s@name + "_rotor");
+        s@name = s@name + "_housing";
+    } else if (hs) {
+        s@piece = gid + "_housing";
+        @orient = p@housing_orient;
+    } else {
+        s@piece = gid + "_rotor";
+        @P = rotor_p;
+    }
+}
+// 形を持たない内部パーツ（branch / restore / 遊星の位置決めの offset など）は、どのテンプレートにも当てない
+if (i@has_geo == 0) s@piece = "_none";

@@ -1,0 +1,45 @@
+// detail_pieces（Point Wrangle）… 実装側で足した見た目用の部品
+// 1) 固定サイズのパーツ（モーターや関節）は len を伸ばしても形が伸びないので、
+//    次のソケットまでを細い「軸（rod）」でつなぎます（回転系では coax の層だけ）。
+// 2) グリッパに指を 2 本足して、ソルバが出した open_angle だけ開きます。
+// 3) タービン（R-05）の羽根を blade_count 枚、放射状に並べます（羽根 1 枚が 1 個の剛体）。
+//    pitch_anim があれば、羽根の付け根（スパン方向 = ローカル X）まわりにピッチを時間で変えます。
+string NO_ROD[] = {"base", "branch", "cap", "gripper", "drill", "head", "wheel", "foot"};
+string gid = s@geo_id;
+if (i@has_geo == 1) {
+    float r = f@radius;
+    float L = f@length + f@ext;
+    vector4 q = p@orient;
+    int want_rod = (gid == "" && i@scale_mode == 0 && find(NO_ROD, s@part_type) < 0)
+                || (i@shaft == 1 && s@piece == gid + "_rotor");
+    if (want_rod && L > r * 1.2) {
+        int np = addpoint(0, @ptnum);
+        setpointattrib(0, "piece", np, "rod");
+        setpointattrib(0, "name", np, s@name + "_rod");
+        setpointattrib(0, "P", np, v@frame_pos);
+        setpointattrib(0, "scale", np, set(r * 0.45, r * 0.45, L));
+    }
+    if (s@part_type == "gripper") {
+        float oa = f@open_angle;
+        for (int side = -1; side <= 1; side += 2) {
+            int np = addpoint(0, @ptnum);
+            setpointattrib(0, "P", np, @P + qrotate(q, set(0, side * r * 0.55, r * 0.8)));
+            setpointattrib(0, "orient", np, qmultiply(q, quaternion(radians(-side * oa), {1, 0, 0})));
+            setpointattrib(0, "piece", np, "finger");
+            setpointattrib(0, "name", np, s@name + (side < 0 ? "_finger_R" : "_finger_L"));
+        }
+    }
+    if (startswith(gid, "turbine") && s@piece == gid + "_rotor") {
+        int nb = int(f@geo_blade_count);
+        float T = @Time * detail(0, "global_speed");
+        float pitch = f@geo_pitch_anim * sin(radians(360.0 * f@speed * T + f@phase));
+        for (int b = 0; b < nb; b++) {
+            vector4 qb = qmultiply(q, quaternion(radians(360.0 * b / nb), {0, 0, 1}));
+            qb = qmultiply(qb, quaternion(radians(pitch), {1, 0, 0}));
+            int np = addpoint(0, @ptnum);
+            setpointattrib(0, "orient", np, qb);
+            setpointattrib(0, "piece", np, gid + "_blade");
+            setpointattrib(0, "name", np, sprintf("%s_blade%d", s@name, b));
+        }
+    }
+}

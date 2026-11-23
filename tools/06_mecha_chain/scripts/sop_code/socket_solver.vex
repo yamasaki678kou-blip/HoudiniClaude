@@ -1,0 +1,307 @@
+// ============================================================
+// socket_solver（Detail Wrangle = 1 回だけ実行）
+// 各パーツの置き場所（frame）と出力ソケット（socket）を、親から順に計算します。
+// パーサが「親が先」の順で点を並べているので、0 番から順に計算すれば
+// 親のソケットは必ず先に求まっています。
+// 元: 実装パケット v0.3 §5.3。回転系 5 種（仕様 v0.5）で gimbal_frame / crank_rod / crank_slider を追加。
+// 大事な約束: 時刻 @Time だけから毎フレーム独立に解く（直前フレームは読まない）。
+//   → どのフレームへ飛んでも同じ絵になり、VAT の「1 フレーム目を基準」とも矛盾しない。
+// 入力: 1 = パーツの点 / 2 = ベースポイント（任意）/ 3 = 第2入力の読み分け結果（ターゲット点）
+// ============================================================
+
+// ---- 掛け算の順番に気をつける場所は、この compose() 1 か所だけ ----
+// qmultiply(a, b) は「先に b（子のローカル回転）、次に a（親の向き）」の順で回す合成です。
+vector4 compose(vector4 parent_q; vector4 local_q)
+{
+    return qmultiply(parent_q, local_q);
+}
+vector4 q_axis(float deg; vector axis)
+{
+    return quaternion(radians(deg), axis);
+}
+float mget(vector cols[]; int r; int c)
+{
+    vector v = cols[c];
+    return v[r];
+}
+// 回転 q を「軸 i → j → k の順の 3 つの角度」に分ける（親 × 子の順 = q = Ri(a) Rj(b) Rk(c)）。
+// 行列は列ベクトル（基底ベクトルを q で回したもの）で読むので、Houdini の行列の並びに依存しない。
+vector euler_decomp(vector4 q; int i; int j; int k)
+{
+    vector cols[] = array(qrotate(q, {1, 0, 0}), qrotate(q, {0, 1, 0}), qrotate(q, {0, 0, 1}));
+    float s = (j == (i + 1) % 3) ? 1.0 : -1.0;
+    float b = asin(clamp(s * mget(cols, i, k), -1.0, 1.0));
+    float a = atan2(-s * mget(cols, j, k), mget(cols, k, k));
+    float c = atan2(-s * mget(cols, i, j), mget(cols, i, i));
+    return set(degrees(a), degrees(b), degrees(c));
+}
+
+float T = @Time * f@global_speed;   // 時刻（秒）× 全体の速さ
+int n = npoints(0);
+
+addpointattrib(0, "frame_pos", {0, 0, 0});
+addpointattrib(0, "frame_orient", {0, 0, 0, 1});
+addpointattrib(0, "housing_orient", {0, 0, 0, 1});
+addpointattrib(0, "socket_pos", {0, 0, 0});
+addpointattrib(0, "drive_angle", 0.0);
+addpointattrib(0, "ext", 0.0);
+addpointattrib(0, "open_angle", 0.0);
+addpointattrib(0, "lock_fade", 0.0);
+
+// ---- 入力を配列に写す ----
+string types[];
+int parents[];
+int axes[];
+int dmodes[];
+int joins[];
+int depths[];
+float lens[];
+float speeds[];
+float phases[];
+float ratios[];
+float lmins[];
+float lmaxs[];
+float pas[];
+float pbs[];
+float pcs[];
+float pds[];
+float pes[];
+float pfs[];
+float preyaws[];
+float rads[];
+vector auxv[];
+resize(types, n); resize(parents, n); resize(axes, n); resize(dmodes, n);
+resize(joins, n); resize(depths, n); resize(lens, n); resize(speeds, n);
+resize(phases, n); resize(ratios, n); resize(lmins, n); resize(lmaxs, n);
+resize(pas, n); resize(pbs, n); resize(pcs, n); resize(pds, n); resize(pes, n); resize(pfs, n);
+resize(preyaws, n); resize(rads, n); resize(auxv, n);
+for (int i = 0; i < n; i++) {
+    types[i]   = point(0, "part_type", i);
+    parents[i] = point(0, "parent_id", i);
+    axes[i]    = point(0, "axis", i);
+    dmodes[i]  = point(0, "drive_mode", i);
+    joins[i]   = point(0, "join_mode", i);
+    depths[i]  = point(0, "depth", i);
+    lens[i]    = point(0, "length", i);
+    speeds[i]  = point(0, "speed", i);
+    phases[i]  = point(0, "phase", i);
+    ratios[i]  = point(0, "ratio", i);
+    lmins[i]   = point(0, "limit_min", i);
+    lmaxs[i]   = point(0, "limit_max", i);
+    pas[i]     = point(0, "pa", i);
+    pbs[i]     = point(0, "pb", i);
+    pcs[i]     = point(0, "pc", i);
+    pds[i]     = point(0, "pd", i);
+    pes[i]     = point(0, "pe", i);
+    pfs[i]     = point(0, "pf", i);
+    preyaws[i] = point(0, "pre_yaw", i);
+    rads[i]    = point(0, "radius", i);
+    auxv[i]    = point(0, "aux_vec", i);
+}
+
+vector sout_pos[];
+vector4 sout_ori[];
+vector fpos[];
+vector4 fori[];
+vector4 hori[];
+float drv[];
+float exts[];
+float opens[];
+float gim[];
+float lockf[];
+resize(sout_pos, n); resize(sout_ori, n); resize(fpos, n); resize(fori, n); resize(hori, n);
+resize(drv, n); resize(exts, n); resize(opens, n); resize(gim, n); resize(lockf, n);
+
+vector AXES[] = { {1, 0, 0}, {0, 1, 0}, {0, 0, 1} };
+vector4 QIDENT = {0, 0, 0, 1};
+
+// 根の置き場所: 2 番目の入力（ベースポイント）があれば、その最初の点の P と orient
+vector root_pos = {0, 0, 0};
+vector4 root_q = QIDENT;
+if (npoints(1) > 0) {
+    root_pos = point(1, "P", 0);
+    if (haspointattrib(1, "orient")) root_q = point(1, "orient", 0);
+}
+
+for (int i = 0; i < n; i++) {
+    int par = parents[i];
+    vector  pp  = par < 0 ? root_pos : sout_pos[par];
+    vector4 pq  = par < 0 ? root_q : sout_ori[par];
+    float   din = par < 0 ? 0.0 : drv[par];
+    string ty = types[i];
+    float ph = phases[i];
+    float sp = speeds[i];
+    float wt = 360.0 * sp * T + ph;
+    vector ax = AXES[clamp(axes[i], 0, 2)];
+
+    vector4 ql = QIDENT;
+    vector off = set(0, 0, 0);
+    float ext = 0.0;
+    float dout = din;
+    float oa = 0.0;
+
+    if (ty == "branch") {
+        ql = q_axis(preyaws[i], set(0, 1, 0));
+    } else if (ty == "motor_rot") {
+        float ang = pas[i] * wt;
+        ql = q_axis(ang, ax);
+        dout = joins[i] == 1 ? din + ang : ang;
+    } else if (ty == "motor_osc") {
+        float w = pas[i] > 0.5 ? (2.0 * abs(frac(wt / 360.0) * 2.0 - 1.0) - 1.0)
+                               : sin(radians(wt));
+        float ang = pbs[i] * w;
+        ql = q_axis(ang, ax);
+        dout = joins[i] == 1 ? din + ang : ang;
+    } else if (ty == "servo") {
+        float ang = clamp(pas[i] + pbs[i] * sin(radians(360.0 * sp * pcs[i] * T + ph)),
+                          lmins[i], lmaxs[i]);
+        ql = q_axis(ang, ax);
+        dout = ang;
+    } else if (ty == "piston") {
+        ext = pas[i] * (0.5 - 0.5 * cos(radians(wt)));
+    } else if (ty == "hinge") {
+        float ang;
+        if (pds[i] > 0.5) {
+            ang = din;   // 駆動消費（d=1）: クランプしない
+        } else {
+            ang = pas[i] + (pcs[i] > 0 ? pbs[i] * sin(radians(360.0 * sp * pcs[i] * T + ph)) : 0.0);
+            ang = clamp(ang, lmins[i], lmaxs[i]);
+        }
+        ql = q_axis(ang, ax);
+        if (dmodes[i] == 1) dout = 0.0;
+    } else if (ty == "ball") {
+        float ax_ = clamp(pas[i] + pcs[i] * sin(radians(wt)), lmins[i], lmaxs[i]);
+        float ay_ = clamp(pbs[i] + pcs[i] * cos(radians(wt)), lmins[i], lmaxs[i]);
+        ql = qmultiply(q_axis(ax_, set(1, 0, 0)), q_axis(ay_, set(0, 1, 0)));
+        dout = 0.0;
+    } else if (ty == "universal" || ty == "bent") {
+        vector axv = set(cos(radians(pbs[i])), sin(radians(pbs[i])), 0);
+        ql = q_axis(pas[i], axv);
+    } else if (ty == "twist") {
+        ql = q_axis(pas[i] + pbs[i] * T, set(0, 0, 1));
+    } else if (ty == "spring") {
+        float lag = depths[i] * 30.0 / max(pas[i], 0.001);
+        ql = q_axis(pbs[i] * sin(radians(wt) - radians(lag)), ax);
+    } else if (ty == "prismatic") {
+        float s = pcs[i] > 0 ? (0.5 - 0.5 * cos(radians(360.0 * sp * pcs[i] * T + ph))) : 1.0;
+        ext = lerp(pas[i], pbs[i], s);
+    } else if (ty == "offset") {
+        off = set(pas[i], pbs[i], 0) * rads[i];   // 横ずれは rad 単位
+    } else if (ty == "wheel") {
+        ql = q_axis(din * pas[i], ax);
+    } else if (ty == "head") {
+        float yaw = pas[i] * sin(radians(360.0 * sp * pcs[i] * T + ph));
+        float pit = pbs[i] * sin(radians(360.0 * sp * pcs[i] * T * 0.7 + ph));
+        ql = qmultiply(q_axis(yaw, set(0, 1, 0)), q_axis(pit, set(1, 0, 0)));
+    } else if (ty == "gripper") {
+        oa = pas[i];
+        if (pbs[i] > 0.5) oa = pas[i] * (0.5 + 0.5 * sin(radians(wt)));
+    } else if (ty == "gimbal_frame") {
+        // ---- R-03 ジンバル: 3 つのフレームは連番（i, i+1, i+2）。1 枚目で 3 つの角度をまとめて決める ----
+        int k = int(pds[i]);
+        if (k == 0 && i + 2 < n) {
+            int a0 = axes[i];
+            int a1 = axes[i + 1];
+            int a2 = axes[i + 2];
+            float fol[];
+            resize(fol, 3);
+            for (int j = 0; j < 3; j++)
+                fol[j] = pas[i + j] * sin(radians(360.0 * speeds[i + j] * pbs[i + j] * T + phases[i + j]));
+            float ang[] = fol;
+            float lock = 0.0;
+            int mode = int(pes[i]);
+            if (mode == 1) {
+                // stabilize: 親までの回転の逆を、axis_order の順の 3 角度に分けて各フレームへ配る
+                vector hold = auxv[i];
+                vector4 qt = eulertoquaternion(radians(hold), XFORM_XYZ);
+                vector4 qrel = qmultiply(qinvert(pq), qt);
+                vector e = euler_decomp(qrel, a0, a1, a2);
+                // ジンバルロック対策（状態を持たない）: 真ん中の角が 80°→90° で補正量を 1→0 にフェード
+                float w = 1.0 - smooth(80.0, 90.0, abs(e[1]));
+                for (int j = 0; j < 3; j++)
+                    if (pcs[i + j] > 0.5) ang[j] = lerp(fol[j], e[j], w);
+                lock = 1.0 - w;
+            } else if (mode == 2) {
+                // track: ペイロードの +Z を目標点へ向ける。使うのは X と Y の 2 軸（ロール Z は 0 のまま）
+                vector tgt = auxv[i];
+                int ti = int(pfs[i]);
+                if (ti >= 0) {
+                    int tp = findattribval(2, "point", "target_index", ti);
+                    if (tp >= 0) tgt = point(2, "P", tp);
+                }
+                vector d = normalize(qrotate(qinvert(pq), tgt - pp));
+                int jx = a0 == 0 ? 0 : (a1 == 0 ? 1 : 2);
+                int jy = a0 == 1 ? 0 : (a1 == 1 ? 1 : 2);
+                float tx = 0.0;
+                float ty_ = 0.0;
+                if (jx < jy) {   // 外側が X: Rx(tx) Ry(ty) e_z = d
+                    ty_ = degrees(asin(clamp(d.x, -1.0, 1.0)));
+                    tx = degrees(atan2(-d.y, d.z));
+                } else {         // 外側が Y: Ry(ty) Rx(tx) e_z = d
+                    tx = degrees(asin(clamp(-d.y, -1.0, 1.0)));
+                    ty_ = degrees(atan2(d.x, d.z));
+                }
+                for (int j = 0; j < 3; j++) ang[j] = 0.0;
+                ang[jx] = tx;
+                ang[jy] = ty_;
+            }
+            for (int j = 0; j < 3; j++) {
+                gim[i + j] = ang[j];
+                lockf[i + j] = lock;
+            }
+        }
+        ql = q_axis(gim[i], ax);
+    } else if (ty == "crank_rod") {
+        // ---- R-04 クランクのロッド: 親（車輪）の駆動角 θ から、閉形式のローカル角で置く ----
+        float r = pas[i];
+        float L = pbs[i];
+        float c = pcs[i];
+        float theta = drv[par];                 // 車輪の回転角（motor_rot / hinge の駆動角）
+        float tk = theta + pds[i] - pes[i];     // ピン k の角度を、そのガイドの向きから測る
+        float s = (c - r * sin(radians(tk))) / L;
+        float alpha = degrees(asin(clamp(s, -1.0, 1.0)));
+        off = qrotate(q_axis(pds[i], {1, 0, 0}), set(0, 0, r)) * rads[i];   // ピンの位置（車輪の座標）
+        ql = q_axis(pes[i] + alpha - theta, {1, 0, 0});                     // 車輪から見たロッドの向き
+    } else if (ty == "crank_slider") {
+        // ---- R-04 スライダ: x = r·cosθ + √(L² − (c − r·sinθ)²)。piston と同じく ext で下流へ ----
+        float r = pas[i];
+        float L = pbs[i];
+        float c = pcs[i];
+        float theta = drv[int(pfs[i])];
+        float tk = theta + pds[i] - pes[i];
+        float sn = c - r * sin(radians(tk));
+        float x = r * cos(radians(tk)) + sqrt(max(L * L - sn * sn, 0.0));
+        float xmin = sqrt(max((L - r) * (L - r) - c * c, 0.0));
+        ql = q_axis(pes[i], {1, 0, 0});
+        off = qrotate(ql, set(0, -c, 0)) * rads[i];   // ガイドの横ずれ c（rad 単位）
+        ext = (x - xmin) * rads[i];
+        dout = theta;
+    }
+    if (ty == "drill") ql = q_axis(din * pas[i] + 360.0 * sp * T * pas[i], set(0, 0, 1));
+
+    if (dmodes[i] == 2) dout = din * ratios[i];
+    if (dmodes[i] == 1 && ty != "hinge") dout = 0.0;
+
+    vector4 fq = compose(pq, ql);
+    vector fp = pp + qrotate(pq, off);
+    fpos[i] = fp;
+    fori[i] = fq;
+    // ハウジング（回らない側）の向き: モーターは自分の回転を除いた向き、それ以外はフレームの向き
+    hori[i] = (ty == "motor_rot" || ty == "motor_osc") ? pq : fq;
+    sout_pos[i] = fp + qrotate(fq, set(0, 0, lens[i] + ext));
+    sout_ori[i] = fq;
+    drv[i] = dout;
+    exts[i] = ext;
+    opens[i] = oa;
+}
+
+for (int i = 0; i < n; i++) {
+    setpointattrib(0, "frame_pos", i, fpos[i]);
+    setpointattrib(0, "frame_orient", i, fori[i]);
+    setpointattrib(0, "housing_orient", i, hori[i]);
+    setpointattrib(0, "socket_pos", i, sout_pos[i]);
+    setpointattrib(0, "drive_angle", i, drv[i]);
+    setpointattrib(0, "ext", i, exts[i]);
+    setpointattrib(0, "open_angle", i, opens[i]);
+    setpointattrib(0, "lock_fade", i, lockf[i]);
+}
