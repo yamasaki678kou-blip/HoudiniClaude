@@ -24,7 +24,8 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `mecha_chain_sample.hiplc` | 見本のシーン。レシピ02、プリセット 20 本、検証チェーン、練習用 |
 | `otls/mecha_chain.hdalc` | HDA 本体（`hclaude::mecha_chain::1.0`、ラベル「汎用メカチェーン」） |
 | `scripts/build_sample.py` | HDA と見本シーンと画像を、ゼロから作り直すスクリプト |
-| `verify_log.txt` | 自動検証の結果（60 項目、すべて PASS） |
+| `verify_log.txt` | 自動検証の結果（63 項目、すべて PASS） |
+| `export/` | レシピ02 を VAT（剛体モード）で書き出したもの（FBX + EXR + Unity 用マテリアル） |
 | `images/` | この README の画像と GIF |
 | `REPORT.md` | しくみの解説（技術記事のたたき台） |
 
@@ -102,11 +103,13 @@ base > motor_rot(speed=0.3) > hinge(axis=0, a=10, b=30, c=0.6) > link(len=1.2) >
 | `spring`（ばね） | 硬さ | 揺れ幅 | | |
 | `piston`（ピストン） | ストローク | | | |
 | `prismatic`（スライド） | 最小 | 最大 | 往復の速さ（0 で b に固定） | |
-| `offset`（横ずらし） | X のずれ | Y のずれ | | |
+| `offset`（横ずらし） | X のずれ（太さ `rad` を 1 とした単位） | Y のずれ（同じ） | | |
 | `splitter`（枝分かれ） | 枝の数（2〜4） | 広がる角度 | | |
 | `gripper`（つかむ手） | 開く角度 | 1 で自動で開閉 | | |
 | `head`（頭） | 首振りの幅 | うなずきの幅 | 速さ | |
 | `drill` / `wheel` | 回る速さの倍率 | | | |
+
+`offset` の横のずれだけは、長さ `len` と違って **太さ `rad` が 1 の物差し** です。`offset(a=1)` は「太さ 1 本ぶん横へずらす」で、`rad` を変えても形とずれの比率が変わりません。
 
 `link`、`fixed`、`cap`（先端のふた）、`foot`（足）は共通のキーだけです。
 別名も使えます: `mrot` = `motor_rot`、`mosc` = `motor_osc`、`uni` = `universal`、`slide` = `prismatic`、`endcap` = `cap`。
@@ -134,6 +137,25 @@ base > motor_rot(axis=1, speed=0.2) > splitter(a=3, b=50) [ motor_osc(b=35) > gr
 6. **全体の速さ** を 0 にする → 止まる（ポーズの確認に便利）
 7. `motor_osc(b=45, speed=0.8)` に `axis=0` を足す → ねじる動きが、首を振る動きに変わる
 
+## VAT で書き出す（Unity 用）
+
+見本シーンの `vat_recipe02` が、レシピ02 を VAT（Vertex Animation Texture）の **剛体モード** で書き出すための例です。
+すでに書き出したものが `export/` に入っています。
+
+| ファイル | 中身 |
+|---|---|
+| `export/geo/mecha_recipe02_mesh.fbx` | 1 フレーム目の形のメッシュ |
+| `export/tex/mecha_recipe02_pos.exr` / `_rot.exr` / `_col.exr` | 各パーツの位置・回転・色（96 フレーム） |
+| `export/unity/mecha_recipe02_mat.mat` | Unity 用のマテリアル（テクスチャ欄は空なので自分で入れます） |
+
+書き出し直す時は、`/out` の `vat_recipe02` を選んで **Render** を押します（SideFX Labs が必要）。
+Unity 側の手順は [01 Mech Transform の README「Unity に持っていく」](../01_mech_transform/README.md) と同じです。
+
+しくみ: Labs の VAT は「書き出しの最初のフレームでは全パーツが回転なし」が前提です。
+レシピ02 は 1 フレーム目から曲がっているので、`vat_prepare` で「1 フレーム目からどれだけ回ったか」に置き直してから渡しています。
+
+注意: 剛体モードは「動く・回る」だけで、伸び縮みは書き出せません。`piston` や `prismatic` を含むレシピは、伸びない姿で書き出されます。
+
 ## うまくいかない時
 
 | こうなった | 原因と直し方 |
@@ -158,5 +180,5 @@ HDA、見本シーン、`verify_log.txt` を作り直します。後ろに `rend
 
 - モーターの「外側は止まって軸だけ回る」表現（今は外側ごと回ります。Phase2 でテンプレを housing / rotor に分けます）
 - ケーブルやピストンロッドなど、パーツの間をつなぐ造形（Phase2）
-- 出力: VAT（剛体モード）→ 静止メッシュ → アニメ付き FBX の順に試す予定です
+- 出力: VAT（剛体モード）は書き出し済み（Unity での確認はこれから）。静止メッシュ → アニメ付き FBX の順に試す予定です
 - 背景用途ライン（BG-01〜10）は、この Phase1 が通ったので着手できる状態です

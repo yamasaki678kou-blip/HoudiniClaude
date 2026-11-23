@@ -133,6 +133,26 @@ base > bent(a=90) > bent(a=90, b=90) > link
 hinge(d=1) は、仕様 v0.3 のとおり「駆動消費の時はクランプしない」で実装しました。
 角度は回転（クォータニオン）にしてしまえば 855° も 135° も同じ向きなので、±180° に折り返す処理は要りませんでした。
 
+### 4.4 横ずれの単位（offset）
+
+形は `v@scale = (rad, rad, …)` で rad 倍され、テンプレートは半径 1 で作ってあります。つまり **横（X/Y）方向の物差しは rad** です。
+最初の実装では offset の横ずれ `off = set(pa, pb, 0)` を生の値のまま使っていたので、横方向だけ物差しが 2 種類混ざっていました
+（別スレッドの仕様精査での指摘）。今のプリセットでは目立ちませんが、遊星ギアの公転半径や偏心ピンのように
+「形に対してどこにずらすか」が大事なパーツで必ず崩れます。
+
+そこでソルバで rad を掛けるように直しました。所有権表で `radius` の読み手にはソルバが入っているので、契約の範囲内です。
+
+```c
+off = set(pas[i], pbs[i], 0) * rads[i];   // 横ずれは「太さ rad = 1」の単位
+```
+
+パーサで掛けずにソルバで掛けたのは、Geometry Spreadsheet の `pa` / `pb` を「レシピに書いた値そのまま」にしておくためです（パーサの合格条件）。
+目分量の係数ではなく rad そのものを掛けているので、rad を 2 倍にすると、ずれもちょうど 2 倍になります（自動検証: rad 0.15 → (0.150, 0.075)、rad 0.30 → (0.300, 0.150)）。
+Z 方向の `len` と、piston / prismatic の伸び `ext` は、これまでどおり生の値です。
+
+この変更で、プリセット17 の `offset(a=0.2)` は「0.2」から「0.2 × 0.15 = 0.03」のずれになりました。
+前と同じ見た目にしたい時は `offset(a=1.33)` です（プリセットの文字列は仕様の一部なので変えていません）。
+
 ## 5. 造形（frame_decompose → Copy to Points）
 
 ### 5.1 pscale ではなく v@scale
@@ -164,8 +184,9 @@ Pivot は **Origin**（原点 = 入力ソケット）。こうすると回転の
 
 - レシピ02 では、パーツ 7 個 + 軸 4 本 + 指 2 本 = 13 個が、期待どおりに出ました。
 - Python で作った Copy to Points は Attributes from Target が空なので、`resettargetattribs` ボタンを押して既定値
-  `*,^v,^Alpha,^N,^up,^pscale,^scale,^orient,^rot,^pivot,^trans,^transform` を入れています。
-  これで `name` や `part_type` がパック済みパーツの点に残るので、どのパーツがどれかを後から調べられます。
+  `*,^v,^Alpha,^N,^up,^pscale,^scale,^orient,^rot,^pivot,^trans,^transform` を入れ、そこから `^orient` だけを外しています。
+  これで `name` や `part_type` と、向き `orient` がパック済みパーツの点に残ります（`orient` は VAT で使います）。
+  パックの回転は intrinsic transform が持っているので、点に `orient` があっても二重には回りません。
 
 For-Each への退避は不要でした。
 
@@ -178,7 +199,7 @@ For-Each への退避は不要でした。
 
 ## 6. 自動検証
 
-`scripts/build_sample.py` の `verify()` が、HDA を作るたびに 60 項目を確かめて `verify_log.txt` に書きます。全部 PASS です。
+`scripts/build_sample.py` の `verify()` が、HDA を作るたびに 63 項目を確かめて `verify_log.txt` に書きます。全部 PASS です。
 
 中心になっているのは「ソケット契約が崩れていないか」の検査です。どのパーツでも、どのフレームでも、
 
@@ -202,11 +223,51 @@ For-Each への退避は不要でした。
 4. 05〜07 は `axis=1` のヨー回転なので、チェーンが水平に伸びて旋回します。土台は原点で +Z に向いているので、
    「床に立つアーム」に見せたい時は、オブジェクトごと X 軸まわりに -90° 回すと +Z が上になります。
 
-## 8. 次の一手
+## 8. VAT（剛体モード）で書き出す
 
-- **VAT（剛体モード）**: パーツはパック済みでピボットも原点なので、形はそのまま渡せます。
-  ただし過去の実機メモでは「書き出しの最初のフレームは全パーツの `orient` が回転なしでなければならない」ので、
-  レシピ02 のように 1 フレーム目から曲がっているメカは、休みの姿勢（rest）のフレームを先頭に足すなどの工夫が要ります。
-  あわせて、パック済みパーツの点に `orient` と `pivot` を書く処理を足します。
+出力の 1 番手は、SideFX Labs の [Vertex Animation Textures](https://www.sidefx.com/docs/houdini/nodes/out/labs--vertex_animation_textures-3.0.html) の剛体モード（Rigid-Body Dynamics）です。
+パック済みのパーツ 1 個ごとに、各フレームの位置と回転をテクスチャ（EXR）に焼き、Unity のシェーダーで動かします。
+
+### 8.1 「1 フレーム目は回転なし」問題
+
+過去の実機確認で、この ROP は **書き出しの最初のフレームで全パーツの `orient` が回転なし (0,0,0,1)** であることを前提にしていると分かっています
+（内部で最初のフレームの回転を、逆にせずに掛けてしまうため）。ところがレシピ02 は 1 フレーム目から関節が曲がっています。
+
+そこで、見本シーンの `vat_recipe02` では HDA の後ろに `vat_prepare` を置き、「1 フレーム目の姿勢」を基準に置き直しています。
+[Time Shift](https://www.sidefx.com/docs/houdini/nodes/sop/timeshift.html) で 1 フレーム目に固定したものを 2 番目の入力に入れ、同じ名前のパーツを探して:
+
+```c
+int src = findattribval(1, "point", "name", s@name);   // 1 フレーム目の、同じ名前のパーツ
+vector4 q1 = point(1, "orient", src);
+vector p1 = point(1, "P", src);
+v@pivot = p1;                                          // 回転の中心 = 1 フレーム目の位置
+p@orient = qmultiply(p@orient, qinvert(q1));           // 1 フレーム目から、どれだけ回ったか
+```
+
+これで、どのフレームの形も「1 フレーム目の形を `pivot` のまわりに `orient` だけ回して、`P` へ動かす」で作れます。
+VAT の剛体モードがやっているのはまさにこの計算なので、1 フレーム目が曲がっていても正しく再生できるはずです。
+
+自動検証では、Houdini の中でこの計算を自分でやり直し、本物の形と比べています。5 つのフレームで頂点のずれは最大 4.8e-07 でした。
+1 フレーム目の `orient` が全パーツで回転なしになっていることも確かめています。
+
+### 8.2 書き出したもの
+
+| ファイル | 大きさ |
+|---|---|
+| `export/geo/mecha_recipe02_mesh.fbx` | 551 KB（パーツ 13 個ぶんのメッシュ） |
+| `export/tex/mecha_recipe02_pos.exr` / `_rot.exr` / `_col.exr` | 11 KB / 14 KB / 1 KB 未満 |
+| `export/unity/mecha_recipe02_mat.mat` | 4 KB |
+
+ROP の設定は 01 Mech Transform と同じです（engine = unity → `setEnginePreset`、mode = 1、slerpmode = 1）。
+1 つだけ違ったのは、VAT ROP 3.0 のフレーム範囲 `f` が（開始, 終了）の **2 つ** だったことです（3 つ入れると `InvalidSize`）。
+
+### 8.3 まだ分かっていないこと
+
+- **Unity での再生はまだ確かめていません。** Houdini 側の計算が合っていることまでは確認済みです。
+- 剛体モードは伸び縮みを表せないので、piston / prismatic を含むレシピは伸びない姿で書き出されます（軟体モードなら表せます）。
+
+## 9. 次の一手
+
+- Unity で `export/` を読み込み、レシピ02 が Houdini と同じに動くかを確かめる。
 - 静止メッシュ（ポーズ固定）は今すぐ出せます。アニメ付き FBX は、出力 2 の骨組みが `name` と `3@transform` を持つ KineFX スケルトンの形になっているので、それを起点に単独のセッションで進めます。
 - 背景用途ライン（BG-01〜10）は、Phase1 の合格をもって着手できます。

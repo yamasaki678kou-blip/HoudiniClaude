@@ -40,7 +40,7 @@ Houdini 21.0.700
 [PASS] 動く: 14 背中のサブアーム ... パーツ 7 個, ソケット契約のずれ最大 3.1e-07, 先端の移動 最大 1.06
 [PASS] 動く: 15 天井ファン ... パーツ 13 個, ソケット契約のずれ最大 1.7e-07, 先端の移動 最大 6.50
 [PASS] 動く: 16 ピストンポンプ ... パーツ 6 個, ソケット契約のずれ最大 2.4e-07, 先端の移動 最大 0.50
-[PASS] 動く: 17 アンテナ／レーダー ... パーツ 5 個, ソケット契約のずれ最大 8.9e-08, 先端の移動 最大 0.17
+[PASS] 動く: 17 アンテナ／レーダー ... パーツ 5 個, ソケット契約のずれ最大 8.9e-08, 先端の移動 最大 0.03
 [PASS] 動く: 18 ゲート開閉（drive=Block） ... パーツ 4 個, ソケット契約のずれ最大 2.3e-07, 先端の移動 最大 2.01
 [PASS] 動く: 19 カウンター回転ツイン ... パーツ 7 個, ソケット契約のずれ最大 1.2e-07, 先端の移動 最大 0.00
 [PASS] 動く: 20 スプリング・カオス ... パーツ 8 個, ソケット契約のずれ最大 4.8e-07, 先端の移動 最大 0.00
@@ -54,14 +54,17 @@ Houdini 21.0.700
 [PASS] hinge の limit: 振幅 60° でも ±20° で頭打ち ... -20.00〜20.00°
 [PASS] hinge(d=1): 駆動角が 180° を超えても張り付かずに回り続ける ... 駆動角 855.0° → 関節の向き 135.0°（135.0° と同じ向き）
 [PASS] spring: 他の枝を増やして点番号が変わっても揺れ方は同じ（depth 方式） ... 点番号 6→8, 角度 -14.872° / -14.872°
+[PASS] offset の横ずれは rad 単位: rad を 2 倍にすると、ずれも 2 倍（形との比率が一定） ... rad 0.15 → ずれ (0.150, 0.075) / rad 0.30 → ずれ (0.300, 0.150)
 [PASS] global_speed: 2 倍なら半分の時間、0.5 倍なら 2 倍の時間で同じ姿勢
 [PASS] テンプレート: piece ごとに 1 個のパック済みプリミティブ（ピボットは原点） ... 24 種, primType.PackedFragment
 [PASS] scale_mode: link は len で伸び、motor は len で伸びず rad でだけ大きくなる ... link 長さ 1.00→2.50 / motor 長さ 0.240→0.240（rad 2 倍で 0.480）
 [PASS] （追加）motor から次のソケットまで軸 rod がつながる
 [PASS] Copy to Points（Piece Attribute）: 置くべき数だけパーツが出る ... 13 個
-       Copy to Points が写した点の属性: P, axis, depth, drive_angle, drive_mode, ext, frame_orient, frame_pos, has_geo, join_mode, length, limit_max, limit_min, name, open_angle, order, pa, parent_id, part_type, pb, pc, pd, phase, piece, pre_pitch, pre_yaw, radius, ratio, scale_mode, socket_pos, speed, tag
-       Attributes from Target の既定: *,^v,^Alpha,^N,^up,^pscale,^scale,^orient,^rot,^pivot,^trans,^transform
+       Copy to Points が写した点の属性: P, axis, depth, drive_angle, drive_mode, ext, frame_orient, frame_pos, has_geo, join_mode, length, limit_max, limit_min, name, open_angle, order, orient, pa, parent_id, part_type, pb, pc, pd, phase, piece, pre_pitch, pre_yaw, radius, ratio, scale_mode, socket_pos, speed, tag
+       Attributes from Target の既定: *,^v,^Alpha,^N,^up,^pscale,^scale,^rot,^pivot,^trans,^transform
 [PASS] 骨組み: 7 パーツ + 先端 1 点、3@transform 付き ... 8 点
 [PASS] プリセットメニュー: 選ぶとレシピ欄が入れ替わる
+[PASS] VAT: 1 フレーム目は全パーツが回転なし（orient = 単位）、pivot あり ... 13 パーツ
+[PASS] VAT: 1 フレーム目の形を pivot まわりに orient だけ回して P へ動かすと、どのフレームの形とも一致 ... 頂点のずれ最大 4.8e-07（5 フレームで比較）
 
-合計 60 項目 / FAIL 0
+合計 63 項目 / FAIL 0

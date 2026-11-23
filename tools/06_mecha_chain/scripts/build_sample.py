@@ -382,6 +382,8 @@ float pbs[];
 float pcs[];
 float pds[];
 float preyaws[];
+float rads[];
+resize(rads, n);
 resize(types, n); resize(parents, n); resize(axes, n); resize(dmodes, n);
 resize(joins, n); resize(depths, n); resize(lens, n); resize(speeds, n);
 resize(phases, n); resize(ratios, n); resize(lmins, n); resize(lmaxs, n);
@@ -404,6 +406,7 @@ for (int i = 0; i < n; i++) {
     pcs[i]     = point(0, "pc", i);
     pds[i]     = point(0, "pd", i);
     preyaws[i] = point(0, "pre_yaw", i);
+    rads[i]    = point(0, "radius", i);
 }
 
 // 計算結果を入れる配列（子は親の値をここから読む）
@@ -485,7 +488,9 @@ for (int i = 0; i < n; i++) {
         float s = pcs[i] > 0 ? (0.5 - 0.5 * cos(radians(360.0 * sp * pcs[i] * T + ph))) : 1.0;
         ext = lerp(pas[i], pbs[i], s);
     } else if (ty == "offset") {
-        off = set(pas[i], pbs[i], 0);
+        // 横（X/Y）のずれは「太さ rad = 1」の単位。形（v@scale = rad 倍、テンプレは半径 1）と同じ物差しにそろえる。
+        // こうしておくと rad を変えても、ずれと形の比率が崩れない（Z 方向の len は生の値のまま）
+        off = set(pas[i], pbs[i], 0) * rads[i];
     } else if (ty == "wheel") {
         ql = q_axis(din * pas[i], ax);
     } else if (ty == "head") {
@@ -911,6 +916,9 @@ def build_hda():
     sp(copy, "idattrib", "piece")
     sp(copy, "pack", 0)
     copy.parm("resettargetattribs").pressButton()
+    # 既定の除外リストから ^orient だけ外す: パック済みパーツの点に向き orient を残す（VAT の剛体モードが読む）。
+    # 点の orient はパックの表示には効かない（回転はパックの intrinsic transform が持つ）ので二重には回らない
+    copy.parm("applyattribs1").set("*,^v,^Alpha,^N,^up,^pscale,^scale,^rot,^pivot,^trans,^transform")
     comment(copy, "5. copy_parts（Copy to Points）\nPiece Attribute = piece で形を差し替え", (0.6, 0.85, 0.6))
 
     scale_parts = sub.createNode("xform", "global_scale")
@@ -997,6 +1005,81 @@ test_bent_double: base > bent(a=90) > bent(a=90, b=90) > link
 """
 
 
+VAT_PREP_VEX = r'''// vat_prepare（Point Wrangle）… VAT（剛体モード）に渡す前の下ごしらえ
+// Labs VAT の剛体モードは「書き出しの最初のフレームでは、全パーツが回転なし」を前提にしています。
+// レシピ02 は 1 フレーム目から曲がっているので、1 フレーム目の姿勢を基準（回転なし）に置き直します。
+//   orient = 今の向き × (1 フレーム目の向き)^-1   … 1 フレーム目から、どれだけ回ったか
+//   pivot  = 1 フレーム目の位置                    … 回転の中心
+// これで「1 フレーム目の形を pivot まわりに orient だけ回して、P へ動かす」と、どのフレームの形にも戻せます。
+int src = findattribval(1, "point", "name", s@name);   // 2 番目の入力 = 1 フレーム目の、同じ名前のパーツ
+vector4 q1 = point(1, "orient", src);
+vector p1 = point(1, "P", src);
+v@pivot = p1;
+p@orient = qmultiply(p@orient, qinvert(q1));            // 先に「1 フレーム目の回転を戻す」、次に「今の回転」
+'''
+
+VAT_NOTE = """VAT（剛体モード）で書き出す
+
+1. /out の vat_recipe02 を選んで Render。export/ に FBX（メッシュ）と EXR（位置・回転）ができます。
+2. 中の vat_prepare が「1 フレーム目 = 回転なし」に置き直しています（Labs VAT の前提）。
+3. Unity 側の手順は tools/01_mech_transform の README「Unity に持っていく」と同じです。
+注意: 伸び縮みするパーツ（piston / prismatic）は剛体モードでは伸びません。
+"""
+
+
+def build_vat_object():
+    """レシピ02 を VAT（剛体モード）で書き出すためのオブジェクトと ROP"""
+    obj = hou.node("/obj").createNode("geo", "vat_recipe02")
+    obj.parmTuple("t").set((0, 0, -12))
+    m = obj.createNode(HDA_TYPE, "mecha_chain1")
+    m.parm("recipe").set(RECIPES["02"])
+    m.parm("preset").set("02")
+    rest = obj.createNode("timeshift", "first_frame")
+    rest.setInput(0, m)
+    rest.parm("frame").deleteAllKeyframes()
+    rest.parm("frame").set(1)
+    comment(rest, "1 フレーム目に固定")
+    prep = obj.createNode("attribwrangle", "vat_prepare")
+    prep.setInput(0, m)
+    prep.setInput(1, rest)
+    prep.parm("class").set("point")
+    prep.parm("snippet").set(VAT_PREP_VEX)
+    comment(prep, "1 フレーム目を「回転なし」の基準にして\norient と pivot を書く", (0.95, 0.7, 0.3))
+    out = obj.createNode("null", "OUT_VAT")
+    out.setInput(0, prep)
+    out.setDisplayFlag(True)
+    out.setRenderFlag(True)
+    obj.layoutChildren()
+    obj.setComment("VAT 書き出し用（レシピ02）")
+    obj.setGenericFlag(hou.nodeFlag.DisplayComment, True)
+    try:
+        rop = hou.node("/out").createNode("labs::vertex_animation_textures::3.0", "vat_recipe02")
+    except hou.OperationFailed:
+        print("WARN SideFX Labs の VAT ROP が見つからないので ROP は作りません")
+        return None
+    rop.parm("engine").set("unity")
+    rop.hm().setEnginePreset(rop)                       # Unity 用の座標系とスケール
+    rop.parm("mode").set(1)                             # Rigid-Body Dynamics（剛体）
+    rop.parm("soppath").set(out.path())
+    rop.parmTuple("f").deleteAllKeyframes()
+    rop.parmTuple("f").set((1, FRAME_END))             # VAT ROP 3.0 の f は（開始, 終了）の 2 つ
+    rop.parm("slerpmode").set(1)                        # 角速度 w を使わない回転補間
+    rop.parm("exportpath").set("$HIP/export")
+    rop.parm("assetname").set("mecha_recipe02")
+    return rop
+
+
+def export_vat():
+    rop = hou.node("/out/vat_recipe02")
+    if rop is None:
+        return
+    rop.hm().cookAndRender(rop)
+    for root, _, files in os.walk(TOOL_DIR + "/export"):
+        for fn in files:
+            p = os.path.join(root, fn)
+            print("vat:", p.replace("\\", "/").split("/export/")[-1], os.path.getsize(p) // 1024, "KB")
+
+
 def make_mecha(name, recipe, t=(0, 0, 0), skeleton=False, label=None):
     obj = hou.node("/obj").createNode("geo", name)
     obj.parmTuple("t").set(t)
@@ -1037,10 +1120,12 @@ def build_sample():
     make_mecha("test_bent_double", BENT_DOUBLE, (-24, 0, 0), skeleton=True, label="bent テスト（2 回）")
     for i, (key, title, recipe) in enumerate(PRESETS):
         make_mecha("preset%s" % key, recipe, gallery_pos(i), label="%s %s" % (key, title))
+    build_vat_object()
     obj = hou.node("/obj")
     obj.layoutChildren()
     sticky(PLAYGROUND_NOTE, (-12, 3), (9, 4.5))
     sticky(TEST_NOTE, (-12, -2.5), (9, 3.2))
+    sticky(VAT_NOTE, (-12, -7), (9, 2.8))
 
 
 # ----------------------------------------------------------------------------
@@ -1095,10 +1180,11 @@ def chain_state(m, frame):
     pa = g.pointFloatAttribValues("pa")
     pb = g.pointFloatAttribValues("pb")
     drv = g.pointFloatAttribValues("drive_angle")
+    rad = g.pointFloatAttribValues("radius")
     parts = []
     for i in range(n):
         parts.append(dict(fp=fp[i], fo=fo[i], sp=sp_[i], parent=par[i], type=ty[i], len=ln[i],
-                          ext=ex[i], pa=pa[i], pb=pb[i], drive=drv[i]))
+                          ext=ex[i], pa=pa[i], pb=pb[i], drive=drv[i], rad=rad[i]))
     return parts
 
 
@@ -1119,7 +1205,7 @@ def invariant_errors(parts):
         worst = max(worst, abs(vlen(vsub(p["sp"], p["fp"])) - (p["len"] + p["ext"])))
         if p["parent"] >= 0:
             par = parts[p["parent"]]
-            off = (p["pa"], p["pb"], 0.0) if p["type"] == "offset" else (0.0, 0.0, 0.0)
+            off = (p["pa"] * p["rad"], p["pb"] * p["rad"], 0.0) if p["type"] == "offset" else (0.0, 0.0, 0.0)
             expect = tuple(a + b for a, b in zip(par["sp"], qrot(par["fo"], off)))
             worst = max(worst, vlen(vsub(p["fp"], expect)))
     return worst
@@ -1302,6 +1388,15 @@ def verify():
     c.check(i1 != i2 and abs(a1 - a2) < 1e-4, "spring: 他の枝を増やして点番号が変わっても揺れ方は同じ（depth 方式）",
             "点番号 %d→%d, 角度 %.3f° / %.3f°" % (i1, i2, a1, a2))
 
+    offs = []
+    for rr in (0.15, 0.3):
+        m.parm("recipe").set("base(rad=%g) > offset(a=1, b=0.5) > link" % rr)
+        st = chain_state(m, 1)
+        offs.append((st[1]["fp"][0], st[1]["fp"][1], st[1]["rad"]))
+    ok = all(abs(x / r - 1.0) < 1e-5 and abs(y / r - 0.5) < 1e-5 for x, y, r in offs)
+    c.check(ok, "offset の横ずれは rad 単位: rad を 2 倍にすると、ずれも 2 倍（形との比率が一定）",
+            " / ".join("rad %.2f → ずれ (%.3f, %.3f)" % (r, x, y) for x, y, r in offs))
+
     m.parm("recipe").set(RECIPES["02"])
     tip1 = chain_state(m, 25)[-1]["sp"]
     m.parm("global_speed").set(2.0)
@@ -1361,6 +1456,45 @@ def verify():
     m.parm("preset").set("11")
     m.hdaModule().load_preset({"node": m, "script_value": "11"})
     c.check(m.evalParm("recipe") == RECIPES["11"], "プリセットメニュー: 選ぶとレシピ欄が入れ替わる")
+
+    # --- 6. VAT（剛体モード）の下ごしらえ
+    vat = hou.node("/obj/vat_recipe02")
+    if vat is not None:
+        out = vat.node("OUT_VAT")
+        g1 = out.geometryAtFrame(1)
+        qs = g1.pointFloatAttribValues("orient")
+        ident = max(abs(abs(qs[i * 4 + 3]) - 1.0) for i in range(len(qs) // 4))
+        c.check(ident < 1e-5 and g1.findPointAttrib("pivot") is not None,
+                "VAT: 1 フレーム目は全パーツが回転なし（orient = 単位）、pivot あり", "%d パーツ" % (len(qs) // 4))
+        tmp = []
+        ts = vat.createNode("timeshift")
+        ts.setInput(0, out)
+        ts.parm("frame").deleteAllKeyframes()
+        ts.parm("frame").set(1)
+        rest = vat.createNode("unpack")
+        rest.setInput(0, ts)
+        sp(rest, "transfer_attributes", "name")
+        rec = vat.createNode("attribwrangle")
+        rec.setInput(0, rest)
+        rec.setInput(1, out)
+        rec.parm("class").set("point")
+        rec.parm("snippet").set('int pr = findattribval(1, "point", "name", s@name);\n'
+                                'vector P = point(1, "P", pr);\n'
+                                'vector4 q = point(1, "orient", pr);\n'
+                                'vector pv = point(1, "pivot", pr);\n'
+                                '@P = P + qrotate(q, @P - pv);\n')
+        truth = vat.createNode("unpack")
+        truth.setInput(0, out)
+        tmp = [ts, rest, rec, truth]
+        worst = 0.0
+        for f in (1, 25, 49, 73, FRAME_END):
+            a = rec.geometryAtFrame(f).pointFloatAttribValues("P")
+            b = truth.geometryAtFrame(f).pointFloatAttribValues("P")
+            worst = max(worst, max(abs(x - y) for x, y in zip(a, b)) if len(a) == len(b) and a else float("inf"))
+        c.check(worst < 1e-4, "VAT: 1 フレーム目の形を pivot まわりに orient だけ回して P へ動かすと、どのフレームの形とも一致",
+                "頂点のずれ最大 %.1e（5 フレームで比較）" % worst)
+        for n_ in tmp:
+            n_.destroy()
 
     obj.destroy()
     summary = "合計 %d 項目 / FAIL %d" % (len(c.lines) - len([l for l in c.lines if l.startswith("       ")]), c.fails)
@@ -1507,6 +1641,8 @@ def main():
     print("saved:", HIP_PATH)
     print("hda:  ", HDA_PATH)
     fails = verify()
+    if "vat" in sys.argv[1:]:
+        export_vat()
     if "render" in sys.argv[1:]:
         render_docs()
     print("verify fails:", fails)
