@@ -16,6 +16,14 @@ Houdini で使える「汎用的なツール / HDA」を作り続けるリポジ
 | 03 | [tools/03_pipe_run](tools/03_pipe_run/) | 配管ジェネレーター。折れ線から角の丸い配管を作り、フランジ・バンド・取り付け金具を付ける | PolyBevel、Sweep、PolyFrame、Copy to Points、VEX |
 | 04 | [tools/04_weathering_mask](tools/04_weathering_mask/) | ウェザリングマスク。角の擦れ・へこみの汚れ・上面のほこり・地際の苔を、形から計算して頂点カラーに書く | Measure（曲率）、Mask by Feature（AO）、VEX |
 
+## 作品（showcase）
+
+ここまでの HDA を組み合わせて、実際に 1 枚の絵にしたものです。
+
+| # | フォルダ | 内容 | 使った HDA |
+|---|---|---|---|
+| 01 | [showcase/01_maintenance_bay](showcase/01_maintenance_bay/) | 整備ドック。レンガの壁に配管が走り、産業用アームが溶接する背景。Karma でレンダリング | 01 / 02 / 03 / 04 / 05 / 06 の 6 本 |
+
 ## 動作環境
 
 - **Houdini 21.0.700 Indie**（Windows）で作成・確認しています。ファイルは Indie 形式（`.hiplc` / `.hdalc`）です。

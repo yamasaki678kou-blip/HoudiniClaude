@@ -40,7 +40,7 @@ OTLS = [
 ]
 
 # USD のどのプリムにどのマテリアルを貼るか。構築中に埋めていく。
-MASONRY, METAL, GLOW_WARM, GLOW_ARC = [], [], [], []
+MASONRY, METAL, GLOW_WARM, GLOW_ARC, GLOW_SPARK = [], [], [], [], []
 
 
 # ---------------------------------------------------------------- 小道具
@@ -89,7 +89,7 @@ def aim_rot(pos, target):
 # この 3 つをそのまま USD の primvar として Karma のマテリアルに渡す。
 LOOK_VEX = u"""// === 汚しマスク -> 見た目（色・粗さ・金属度）===
 // 素の色。use_cd=1 なら入力の Cd（レンガごとの色など）をそのまま使う
-vector base = {USE_CD} ? @Cd : set({BR}, {BG}, {BB});
+vector base = {USE_CD} ? v@srccol : set({BR}, {BG}, {BB});
 
 // 04 Weathering Mask が書いた 4 つのマスクを、強さを掛けて取り出す
 float e = clamp(@mask_edge   * {EW}, 0.0, 1.0);   // 角の擦れ
@@ -119,33 +119,60 @@ f@rough   = clamp(rough + 0.10 * (n - 0.5), 0.04, 1.0);
 f@metal   = clamp(metal, 0.0, 1.0);
 """
 
+# 溶接の火花。粒ごとに違う向きと速さで放物線を描かせる
+SPARK_VEX = u"""// 2 番目の入力（トーチ先端）の位置
+vector tip = point(1, "P", 0);
+float id = float(@ptnum);
+
+// 粒ごとにずらした寿命（0〜1）。フレームで進む
+float life = frac(rand(id * 12.9898) + @Frame * 0.075);
+
+// 飛び出す向き。真下には飛ばせない
+vector dir = normalize(set(rand(id * 3.1 + 0.7) - 0.5,
+                           rand(id * 3.1 + 1.3) * 0.8 + 0.25,
+                           rand(id * 3.1 + 2.9) - 0.5));
+float speed = 1.4 + rand(id * 5.77) * 2.2;
+float t = life * 0.55;                      // 秒
+
+// 放物線（初速度 + 重力）
+@P = tip + dir * speed * t - set(0, 1, 0) * 4.9 * t * t;
+
+// 消えるほど小さく。床についたら消す
+f@pscale = fit01(pow(1.0 - life, 1.6), 0.004, 0.024);
+if (@P.y < 0.02) removepoint(0, @ptnum);
+"""
+
+
 LOOKS = {
     # 名前: (use_cd, base, edge, dirt, dust, grime, rough, rough_edge,
     #        metal, metal_edge, edge_w, cav_w, top_w, grime_w, cvar, nfreq, noff)
-    "brick":   (1, (0.52, 0.27, 0.21), (0.70, 0.60, 0.52), (0.14, 0.11, 0.09),
-                (0.58, 0.56, 0.50), (0.17, 0.26, 0.13), 0.88, 0.75, 0.0, 0.0,
-                0.8, 0.7, 0.5, 1.0, 0.18, 6.0, 11.0),
-    "stone":   (1, (0.34, 0.33, 0.32), (0.52, 0.51, 0.49), (0.10, 0.10, 0.10),
-                (0.42, 0.41, 0.37), (0.15, 0.22, 0.13), 0.90, 0.78, 0.0, 0.0,
-                0.9, 0.8, 0.4, 0.8, 0.16, 5.0, 29.0),
-    "pipe":    (1, (0.36, 0.40, 0.44), (0.76, 0.77, 0.78), (0.10, 0.08, 0.06),
-                (0.44, 0.43, 0.39), (0.16, 0.24, 0.14), 0.52, 0.22, 0.55, 0.95,
-                1.0, 1.0, 0.7, 1.0, 0.12, 7.0, 47.0),
-    "pipe_y":  (0, (0.56, 0.42, 0.13), (0.78, 0.78, 0.78), (0.12, 0.09, 0.05),
-                (0.46, 0.44, 0.39), (0.17, 0.24, 0.14), 0.55, 0.24, 0.45, 0.95,
-                1.0, 1.0, 0.7, 1.0, 0.12, 7.0, 61.0),
-    "mech":    (1, (0.40, 0.42, 0.45), (0.80, 0.81, 0.82), (0.09, 0.08, 0.07),
-                (0.40, 0.39, 0.36), (0.14, 0.20, 0.12), 0.42, 0.16, 0.70, 1.0,
-                1.0, 0.9, 0.5, 0.6, 0.10, 9.0, 73.0),
-    "mech_h":  (1, (0.62, 0.46, 0.10), (0.80, 0.81, 0.82), (0.10, 0.08, 0.06),
-                (0.42, 0.41, 0.37), (0.15, 0.21, 0.12), 0.46, 0.18, 0.55, 1.0,
-                1.0, 0.9, 0.5, 0.5, 0.10, 9.0, 83.0),
+    "brick":   (1, (0.52, 0.27, 0.21), (0.46, 0.33, 0.27), (0.11, 0.08, 0.07),
+                (0.40, 0.37, 0.32), (0.13, 0.20, 0.10), 0.92, 0.84, 0.0, 0.0,
+                0.5, 0.7, 0.18, 1.0, 0.22, 6.0, 11.0),
+    "stone":   (1, (0.34, 0.33, 0.32), (0.34, 0.33, 0.31), (0.08, 0.08, 0.08),
+                (0.30, 0.29, 0.26), (0.12, 0.18, 0.10), 0.93, 0.86, 0.0, 0.0,
+                0.5, 0.8, 0.14, 0.8, 0.18, 5.0, 29.0),
+    "pipe":    (0, (0.27, 0.30, 0.33), (0.72, 0.73, 0.74), (0.09, 0.07, 0.05),
+                (0.38, 0.37, 0.33), (0.15, 0.22, 0.13), 0.60, 0.24, 0.40, 0.95,
+                0.7, 1.0, 0.7, 1.0, 0.14, 7.0, 47.0),
+    "pipe_y":  (0, (0.52, 0.37, 0.07), (0.72, 0.72, 0.73), (0.11, 0.08, 0.04),
+                (0.42, 0.40, 0.35), (0.16, 0.23, 0.13), 0.68, 0.28, 0.12, 0.90,
+                0.7, 1.0, 0.7, 1.0, 0.14, 7.0, 61.0),
+    "mech":    (0, (0.26, 0.28, 0.31), (0.72, 0.73, 0.74), (0.08, 0.07, 0.06),
+                (0.36, 0.35, 0.32), (0.14, 0.20, 0.12), 0.55, 0.20, 0.45, 1.0,
+                0.7, 0.9, 0.5, 0.6, 0.10, 9.0, 73.0),
+    "mech_h":  (0, (0.58, 0.33, 0.04), (0.74, 0.74, 0.75), (0.09, 0.07, 0.05),
+                (0.40, 0.38, 0.34), (0.15, 0.21, 0.12), 0.52, 0.22, 0.12, 0.95,
+                0.7, 0.9, 0.5, 0.5, 0.12, 9.0, 83.0),
     "crate":   (0, (0.36, 0.26, 0.16), (0.52, 0.42, 0.28), (0.12, 0.10, 0.07),
                 (0.48, 0.46, 0.41), (0.16, 0.23, 0.13), 0.86, 0.70, 0.0, 0.0,
                 1.0, 0.9, 0.8, 1.0, 0.16, 11.0, 97.0),
-    "steel":   (0, (0.30, 0.31, 0.33), (0.78, 0.78, 0.79), (0.09, 0.07, 0.05),
-                (0.40, 0.39, 0.35), (0.15, 0.21, 0.12), 0.45, 0.18, 0.75, 1.0,
-                1.0, 1.0, 0.6, 0.9, 0.10, 8.0, 113.0),
+    "steel":   (0, (0.21, 0.23, 0.24), (0.70, 0.70, 0.71), (0.07, 0.06, 0.05),
+                (0.34, 0.33, 0.30), (0.14, 0.19, 0.11), 0.62, 0.24, 0.35, 0.95,
+                0.7, 1.0, 0.6, 0.9, 0.12, 8.0, 113.0),
+    "rust":    (0, (0.32, 0.17, 0.09), (0.60, 0.57, 0.53), (0.13, 0.07, 0.04),
+                (0.36, 0.34, 0.30), (0.14, 0.19, 0.11), 0.82, 0.40, 0.18, 0.80,
+                0.8, 1.0, 0.7, 1.0, 0.18, 10.0, 131.0),
 }
 
 
@@ -164,7 +191,13 @@ def weather(parent, name, inp, look, prim_path, bevel=0.0, subdiv=0,
             ao=0.0, edge_w=0.4, cav_w=0.4, bottom_h=0.35, top_angle=55.0,
             path_vex=None, seed=0.0):
     u"""入力 →（角を丸める → 細かくする）→ 04 Weathering Mask → 見た目 VEX → path。"""
-    cur = inp
+    # 04 Weathering Mask は Cd をプレビュー色で上書きするので、
+    # 入ってきた色（レンガごとの色など）を先に srccol へ逃がしておく
+    keep = parent.createNode("attribwrangle", name + "_keepcol")
+    keep.setFirstInput(inp)
+    setp(keep, **{"class": 2,
+                  "snippet": u"v@srccol = (@Cd == {0,0,0}) ? {1,1,1} : v@Cd;"})
+    cur = keep
     if bevel > 0:
         pb = parent.createNode("polybevel", name + "_bevel")
         pb.setFirstInput(cur)
@@ -239,21 +272,26 @@ def build_geo():
               u's@path = (s@name == "mortar") ? "%s" : "%s";' % (mortar_path, brick_path))
         return weather(bay, name, x, look, brick_path, bevel=0.0, subdiv=0,
                        ao=0.0, edge_w=edge_w, cav_w=0.5, bottom_h=bottom_h,
-                       top_angle=62.0, path_vex=pv, seed=seed)
+                       top_angle=34.0, path_vex=pv, seed=seed)
 
     merges.append(wall("wall_back", 11.0, 4.6, (0.42, 0.105, 0.21), 0.5, 0.035, 3.0,
                        "brick", (0, 0, -3.25), (0, 0, 0), (0.46, 0.44, 0.40),
-                       (0.47, 0.25, 0.19), (0.33, 0.21, 0.18), 0.35,
+                       (0.44, 0.22, 0.16), (0.28, 0.16, 0.14), 0.35,
                        jitter_rot=1.2, jitter_depth=0.012, bottom_h=0.75))
     merges.append(wall("wall_left", 9.0, 4.6, (0.42, 0.105, 0.21), 0.5, 0.02, 17.0,
                        "brick", (-4.75, 0, 0.3), (0, 90, 0), (0.44, 0.42, 0.38),
-                       (0.42, 0.23, 0.18), (0.30, 0.20, 0.17), 0.45,
+                       (0.40, 0.21, 0.15), (0.26, 0.15, 0.13), 0.45,
                        jitter_rot=1.0, jitter_depth=0.010, bottom_h=0.75))
     merges.append(wall("floor", 13.0, 11.0, (0.62, 0.62, 0.12), 0.333, 0.012, 5.0,
                        "stone", (0, 0, 6.3), (-90, 0, 0), (0.30, 0.30, 0.29),
                        (0.33, 0.32, 0.31), (0.25, 0.25, 0.25), 0.5,
                        jitter_rot=0.6, jitter_depth=0.006, bottom_h=0.02,
                        edge_w=0.6))
+
+    merges.append(wall("ceiling", 13.0, 11.0, (1.30, 0.95, 0.16), 0.0, 0.0, 29.0,
+                       "stone", (0, 4.62, -4.7), (90, 0, 0), (0.26, 0.26, 0.25),
+                       (0.28, 0.28, 0.27), (0.22, 0.22, 0.22), 0.5,
+                       bottom_h=0.02, edge_w=0.8))
 
     # ======================================================= 配管（03）
     def pipe(name, pts, look, radius, bend_r, band_iv, brackets, bdir,
@@ -271,7 +309,7 @@ def build_geo():
         p = "/bay/pipes/%s" % name
         METAL.append(p)
         return weather(bay, name, pr, look, p, bevel=0.0, subdiv=1, ao=0.0,
-                       edge_w=0.12, cav_w=0.2, bottom_h=0.3, top_angle=55.0,
+                       edge_w=0.60, cav_w=0.5, bottom_h=0.3, top_angle=55.0,
                        seed=abs(hash(name)) % 97)
 
     merges.append(pipe("pipe_main", [(-5.10, 3.62, -2.95), (3.15, 3.62, -2.95),
@@ -291,14 +329,14 @@ def build_geo():
                        "pipe", 0.195, 0.40, 1.1, True, (0, -1, 0), 0.20))
 
     # ======================================================= 小道具（04）
-    def prop_box(name, size, t, r, look, bevel=0.025, subdiv=1, ao=0.75):
+    def prop_box(name, size, t, r, look, bevel=0.025, subdiv=0, ao=0.75):
         b = bay.createNode("box", name + "_box")
         setp(b, sizex=size[0], sizey=size[1], sizez=size[2])
         x = xform(bay, name + "_place", b, t=t, r=r)
         p = "/bay/props/%s" % name
         (MASONRY if look in ("crate", "stone", "brick") else METAL).append(p)
         return weather(bay, name, x, look, p, bevel=bevel, subdiv=subdiv,
-                       ao=ao, edge_w=0.35, cav_w=0.35, bottom_h=0.25,
+                       ao=ao, edge_w=0.60, cav_w=0.50, bottom_h=0.25,
                        top_angle=50.0, seed=abs(hash(name)) % 53)
 
     merges.append(prop_box("pedestal", (1.70, 0.42, 1.70), (0.55, 0.21, -0.55),
@@ -318,13 +356,13 @@ def build_geo():
         x = xform(bay, name + "_place", tb, t=t, r=r)
         p = "/bay/props/%s" % name
         METAL.append(p)
-        return weather(bay, name, x, "steel", p, bevel=0.02, subdiv=1, ao=0.75,
-                       edge_w=0.3, cav_w=0.3, bottom_h=0.22, top_angle=50.0,
+        return weather(bay, name, x, "rust", p, bevel=0.035, subdiv=0, ao=0.75,
+                       edge_w=0.60, cav_w=0.5, bottom_h=0.22, top_angle=50.0,
                        seed=abs(hash(name)) % 71)
 
-    merges.append(barrel("barrel_a", (2.95, 0.46, 1.25), (0, 0, 0)))
-    merges.append(barrel("barrel_b", (3.52, 0.46, 0.55), (0, 0, 0)))
-    merges.append(barrel("barrel_c", (-3.70, 0.31, 1.95), (0, 24, 96)))
+    merges.append(barrel("barrel_a", (2.45, 0.46, 0.15), (0, 0, 0)))
+    merges.append(barrel("barrel_b", (3.05, 0.46, -0.45), (0, 0, 0)))
+    merges.append(barrel("barrel_c", (-3.78, 0.46, 1.70), (0, 24, 0)))
 
     # ============================================= 油圧シリンダー（05）
     def piston(name, p0, p1, cyl=0.62):
@@ -343,11 +381,22 @@ def build_geo():
         p = "/bay/props/%s" % name
         METAL.append(p)
         return weather(bay, name, x, "steel", p, bevel=0.0, subdiv=0, ao=0.0,
-                       edge_w=0.18, cav_w=0.25, bottom_h=0.2, top_angle=50.0,
+                       edge_w=0.60, cav_w=0.5, bottom_h=0.2, top_angle=50.0,
                        seed=abs(hash(name)) % 29)
 
-    merges.append(piston("piston_spare_a", (-3.30, 0.30, -1.55), (-2.35, 0.95, -1.05)))
-    merges.append(piston("piston_spare_b", (-3.95, 0.14, 0.35), (-2.90, 0.14, 0.75)))
+    merges.append(piston("piston_spare_a", (-3.55, 0.13, -1.35), (-2.45, 0.13, -0.95)))
+    merges.append(piston("piston_spare_b", (-3.95, 0.13, 0.35), (-2.90, 0.13, 0.70)))
+
+    # 溶接台（主役のアームが作業している相手）
+    merges.append(prop_box("bench_top", (1.30, 0.09, 0.85), (-0.25, 0.90, 1.40),
+                           (0, 8, 0), "steel", bevel=0.02))
+    for i, (lx, lz) in enumerate([(-0.52, -0.33), (0.52, -0.33),
+                                  (-0.52, 0.33), (0.52, 0.33)]):
+        merges.append(prop_box("bench_leg%d" % i, (0.09, 0.86, 0.09),
+                               (-0.25 + lx, 0.43, 1.40 + lz), (0, 8, 0),
+                               "steel", bevel=0.012, subdiv=0, ao=0.0))
+    merges.append(prop_box("bench_plate", (0.58, 0.05, 0.42), (-0.22, 0.97, 1.38),
+                           (0, 21, 0), "steel", bevel=0.012))
 
     # ============================================= 点検ハッチ（01）
     # 枠 + 扉 2 枚を作り、「どこを軸にどれだけ回るか」をプリム属性で書いて
@@ -401,16 +450,16 @@ def build_geo():
     mt.parm("progress").setExpression("clamp(($FF-14)/38.0, 0, 1)")
     hup = bay.createNode("unpack", "hatch_unpack")   # 01 の出力はパック済み
     hup.setFirstInput(mt)
-    hx = xform(bay, "hatch_place", hup, t=(-1.95, 1.62, -3.18))
+    hx = xform(bay, "hatch_place", hup, t=(2.35, 1.62, -3.18))
     METAL.append("/bay/mech/hatch")
     merges.append(weather(bay, "hatch", hx, "steel", "/bay/mech/hatch",
-                          bevel=0.012, subdiv=1, ao=0.0, edge_w=0.2, cav_w=0.25,
+                          bevel=0.012, subdiv=1, ao=0.0, edge_w=0.6, cav_w=0.5,
                           bottom_h=0.0, top_angle=50.0, seed=7.0))
 
     # ハッチの奥で光る板（中の作業灯のイメージ）
     gl = bay.createNode("box", "hatch_glow_box")
     setp(gl, sizex=2.05, sizey=1.45, sizez=0.04)
-    glx = xform(bay, "hatch_glow_place", gl, t=(-1.95, 1.62, -3.33))
+    glx = xform(bay, "hatch_glow_place", gl, t=(2.35, 1.62, -3.33))
     glp = bay.createNode("attribwrangle", "hatch_glow_path")
     glp.setFirstInput(glx)
     setp(glp, **{"class": 1, "snippet": u's@path = "/bay/fx/hatch_glow";'})
@@ -427,15 +476,15 @@ def build_geo():
         p = "/bay/mech/%s" % name
         METAL.append(p)
         node = weather(bay, name, x, look, p, bevel=0.0, subdiv=1, ao=0.0,
-                       edge_w=0.10, cav_w=0.18, bottom_h=0.25, top_angle=55.0,
+                       edge_w=0.80, cav_w=0.5, bottom_h=0.25, top_angle=55.0,
                        seed=abs(hash(name)) % 37)
         return mc, node
 
     hero_recipe = (
         u"# 主役の産業用アーム。先端は回り続ける溶接トーチ\n"
         u"base(len=0.34, rad=0.27) > motor_osc(axis=2, b=16, speed=0.18, len=0.30) > "
-        u"hinge(axis=0, a=30, b=6, c=0.22, len=0.30) > link(len=1.25, rad=0.17) > "
-        u"hinge(axis=0, a=105, b=7, c=0.30, phase=90, len=0.26) > link(len=0.95, rad=0.13) > "
+        u"hinge(axis=0, a=30, b=6, c=0.22, len=0.30) > link(len=1.25, rad=0.20) > "
+        u"hinge(axis=0, a=105, b=7, c=0.30, phase=90, len=0.26) > link(len=0.95, rad=0.15) > "
         u"ball(a=10, b=6, c=6, len=0.22) > motor_rot(speed=2.6, len=0.18, rad=0.10) > "
         u"drill(len=0.28)")
     hero_t, hero_r = (0.55, 0.42, -0.55), (-90, -38, 0)
@@ -450,9 +499,9 @@ def build_geo():
 
     radar_recipe = (u"# 壁のレーダー\n"
                     u"base(len=0.20, rad=0.15) > servo(b=62, c=0.22, len=0.28) > "
-                    u"offset(a=1.2, len=0.24) > link(len=0.30, rad=0.09) > cap(rad=0.42)")
+                    u"offset(a=1.2, len=0.24) > link(len=0.26, rad=0.08) > cap(rad=0.28)")
     merges.append(mecha("mech_radar", radar_recipe,
-                        (-3.55, 3.55, -3.05), (-24, 14, 0), 1.0, "mech")[1])
+                        (-3.10, 3.05, -3.05), (-26, 18, 0), 1.0, "mech")[1])
 
     hang_recipe = (u"# 天井の配管から吊ったサブアーム\n"
                    u"base(len=0.20, rad=0.12) > motor_osc(axis=1, b=22, speed=0.5, len=0.26) > "
@@ -462,7 +511,7 @@ def build_geo():
                    u"motor_osc(axis=1, b=22, speed=0.5, phase=110, len=0.24) > "
                    u"link(len=0.40, rad=0.055) > gripper(b=1, len=0.26)")
     merges.append(mecha("mech_hang", hang_recipe,
-                        (3.15, 3.45, -2.95), (90, 24, 0), 1.0, "mech")[1])
+                        (1.95, 3.45, -2.62), (90, 24, 0), 1.0, "mech")[1])
 
     # ============================== 溶接トーチの光（主役の先端を追う）
     # 06 の 2 番目の出力（ソケット = 骨組みの点）から、いちばん先の点だけ残す。
@@ -475,7 +524,7 @@ def build_geo():
         u'if (@depth < md - 0.5) removepoint(0, @ptnum);')})
     tip_x = xform(bay, "torch_tip_place", tip, t=hero_t, r=hero_r)
     sph = bay.createNode("sphere", "torch_sphere")
-    setp(sph, type=1, rows=10, cols=14, radx=0.075, rady=0.075, radz=0.075)
+    setp(sph, type=1, rows=10, cols=14, radx=0.06, rady=0.06, radz=0.06)
     cp = bay.createNode("copytopoints::2.0", "torch_copy")
     cp.setInput(0, sph)
     cp.setInput(1, tip_x)
@@ -484,6 +533,25 @@ def build_geo():
     setp(tp, **{"class": 1, "snippet": u's@path = "/bay/fx/torch";'})
     GLOW_ARC.append("/bay/fx/torch")
     merges.append(tp)
+
+    # ============================== 溶接の火花
+    # 先端の位置から、粒ごとに違う向きと速さで放物線を描かせる
+    spk_pts = bay.createNode("add", "spark_points")
+    spk_pts.parm("points").set(110)
+    spk = bay.createNode("attribwrangle", "spark_move")
+    spk.setInput(0, spk_pts)
+    spk.setInput(1, tip_x)
+    setp(spk, **{"class": 2, "snippet": SPARK_VEX})
+    spk_sph = bay.createNode("sphere", "spark_sphere")
+    setp(spk_sph, type=1, rows=4, cols=6, radx=1.0, rady=1.0, radz=1.0)
+    spk_cp = bay.createNode("copytopoints::2.0", "spark_copy")
+    spk_cp.setInput(0, spk_sph)
+    spk_cp.setInput(1, spk)
+    spk_path = bay.createNode("attribwrangle", "spark_path")
+    spk_path.setFirstInput(spk_cp)
+    setp(spk_path, **{"class": 1, "snippet": u's@path = "/bay/fx/sparks";'})
+    GLOW_SPARK.append("/bay/fx/sparks")
+    merges.append(spk_path)
 
     # ======================================================= まとめ
     allm = bay.createNode("merge", "MERGE_ALL")
@@ -556,9 +624,11 @@ def build_stage(out_node, tip_node):
             base_default=(0.45, 0.30, 0.24))
     surface("mat_metal", spec=1.0, coat=0.06, metal_pv=True,
             base_default=(0.40, 0.42, 0.45))
-    surface("mat_glow_warm", emission=2.6, emis_col=(1.0, 0.72, 0.42),
+    surface("mat_glow_warm", emission=0.85, emis_col=(1.0, 0.72, 0.42),
             base_default=(0.05, 0.04, 0.03))
-    surface("mat_glow_arc", emission=90.0, emis_col=(0.78, 0.88, 1.0),
+    surface("mat_glow_arc", emission=80.0, emis_col=(0.78, 0.88, 1.0),
+            base_default=(0.02, 0.02, 0.02))
+    surface("mat_glow_spark", emission=7.5, emis_col=(1.0, 0.58, 0.18),
             base_default=(0.02, 0.02, 0.02))
     ml.layoutChildren()
 
@@ -567,7 +637,8 @@ def build_stage(out_node, tip_node):
     groups = [(MASONRY, "/materials/mat_masonry"),
               (METAL, "/materials/mat_metal"),
               (GLOW_WARM, "/materials/mat_glow_warm"),
-              (GLOW_ARC, "/materials/mat_glow_arc")]
+              (GLOW_ARC, "/materials/mat_glow_arc"),
+              (GLOW_SPARK, "/materials/mat_glow_spark")]
     am.parm("nummaterials").set(len(groups))
     for i, (paths, mat) in enumerate(groups, start=1):
         am.parm("primpattern%d" % i).set(" ".join(paths))
@@ -621,7 +692,7 @@ def build_stage(out_node, tip_node):
     dome.setFirstInput(cur[0])
     setp(dome, primpath="/lights/sky_ambient")
     setp(dome, **{"xn__inputsintensity_control_jeb": "set",
-                  "xn__inputsintensity_i0a": 0.14,
+                  "xn__inputsintensity_i0a": 0.018,
                   "xn__inputscolor_control_06a": "set",
                   "xn__inputscolor_ztar": 0.42,
                   "xn__inputscolor_ztag": 0.56,
@@ -630,25 +701,25 @@ def build_stage(out_node, tip_node):
 
     # 作業灯（キーライト）。右手前の上から、主役のアームへ
     L("key_lamp", "UsdLuxRectLight", (4.60, 4.30, 2.60), (0.45, 1.35, -0.90),
-      34.0, (1.0, 0.84, 0.62), exposure=1.2, width=1.9, height=1.2)
+      34.0, (1.0, 0.82, 0.58), exposure=-0.8, width=1.9, height=1.2)
     # 奥左からの冷たいリムライト（シルエットを出す）
     L("rim_cool", "UsdLuxRectLight", (-4.10, 4.40, -1.30), (0.60, 1.60, 0.40),
-      26.0, (0.50, 0.68, 1.0), exposure=1.0, width=2.4, height=1.6)
+      26.0, (0.46, 0.64, 1.0), exposure=-1.6, width=2.4, height=1.6)
     # 床を少し起こすバウンス
     L("floor_bounce", "UsdLuxRectLight", (1.40, 0.55, 3.40), (0.40, 1.20, -1.20),
-      8.0, (0.95, 0.80, 0.66), exposure=0.0, width=3.0, height=2.0,
+      8.0, (0.95, 0.80, 0.66), exposure=-2.7, width=3.0, height=2.0,
       specular=0.25)
     # ハッチの中の灯り
-    L("hatch_inner", "UsdLuxSphereLight", (-1.95, 1.62, -3.42), (-1.95, 1.62, 0.0),
-      9.0, (1.0, 0.70, 0.40), exposure=1.0, radius=0.35, specular=0.6)
+    L("hatch_inner", "UsdLuxSphereLight", (2.35, 1.62, -3.40), (2.35, 1.62, 0.0),
+      9.0, (1.0, 0.70, 0.40), exposure=-0.9, radius=0.35, specular=0.6)
     # 溶接トーチ。アームの先端をフレームごとに追いかける
     torch = L("torch_arc", "UsdLuxSphereLight", (0.0, 1.0, 0.0), (0.0, 0.0, -1.0),
-              2.2, (0.80, 0.90, 1.0), exposure=3.4, radius=0.09)
+              2.2, (0.78, 0.88, 1.0), exposure=1.7, radius=0.085)
 
     # --------------------------------------------- うっすらした空気（霧）
     fog = st.createNode("karmafogbox", "air_haze")
     fog.setFirstInput(cur[0])
-    setp(fog, primpath="/lights/air_haze", density=0.016, shadow=0,
+    setp(fog, primpath="/lights/air_haze", density=0.055, shadow=1,
          colorr=0.62, colorg=0.66, colorb=0.72, addnoise=1, noisescale=1.6,
          amplitude=0.5, tx=0.0, ty=2.4, tz=0.4, sx=13.0, sy=5.2, sz=10.0)
     cur[0] = fog
@@ -670,8 +741,8 @@ def build_stage(out_node, tip_node):
         return c
 
     cam("cam_hero", (5.27, 3.09, 6.79), (-0.25, 1.60, -0.80), 24.0)
-    cam("cam_wide", (6.60, 2.30, 8.40), (-0.60, 1.90, -1.20), 20.0)
-    cam("cam_detail", (2.35, 2.55, 2.05), (0.40, 2.05, -0.70), 48.0)
+    cam("cam_wide", (5.90, 2.00, 7.30), (-0.45, 1.70, -1.05), 22.0)
+    cam("cam_detail", (1.90, 1.78, 3.15), (-0.30, 1.05, 1.35), 42.0)
 
     # --------------------------------------------- レンダー設定
     rs = st.createNode("karmarendersettings", "render_settings")
@@ -795,9 +866,9 @@ def main():
     if mode == "test":
         render(rop, rs, "cam_hero", HERE + "/render/test.png", (640, 360), 12)
     elif mode == "still":
-        for camname, res, spp in (("cam_hero", (1920, 1080), 200),
-                                  ("cam_wide", (1920, 1080), 160),
-                                  ("cam_detail", (1600, 1600), 160)):
+        for camname, res, spp in (("cam_hero", (1920, 1080), 48),
+                                  ("cam_wide", (1920, 1080), 36),
+                                  ("cam_detail", (1400, 1400), 40)):
             render(rop, rs, camname, HERE + "/render/%s.png" % camname, res, spp)
     elif mode == "seq":
         render(rop, rs, "cam_hero", HERE + "/render/seq/bay.$F4.png",
