@@ -44,6 +44,27 @@ MASONRY, METAL, GLOW_WARM, GLOW_ARC, GLOW_SPARK = [], [], [], [], []
 
 
 # ---------------------------------------------------------------- 小道具
+def sync_otls():
+    u"""HDA をこのフォルダの otls/ にコピーしてから読み込む。
+
+    Houdini は .hip と同じ場所の otls/ を自動で見に行くので、
+    こうしておくと「シーンを開いただけで HDA が入っている」状態になる。
+    （これがないと、開いたときに
+     "using incomplete asset definition" の警告が出て、中身が空になる）
+    """
+    import shutil
+    dst_dir = HERE + "/otls"
+    if not os.path.isdir(dst_dir):
+        os.makedirs(dst_dir)
+    for o in OTLS:
+        src = REPO + "/" + o
+        dst = dst_dir + "/" + os.path.basename(o)
+        if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+            shutil.copy2(src, dst)
+        hou.hda.installFile(dst)
+    print("  otls: %d 個を %s に同期しました" % (len(OTLS), dst_dir))
+
+
 def setp(node, **kwargs):
     u"""パラメータをまとめて設定する。無いパラメータは警告だけ出して飛ばす。"""
     for k in sorted(kwargs.keys()):
@@ -842,8 +863,7 @@ def main():
     hou.setFps(FPS)
     hou.playbar.setFrameRange(FSTART, FEND)
     hou.playbar.setPlaybackRange(FSTART, FEND)
-    for o in OTLS:
-        hou.hda.installFile(REPO + "/" + o)
+    sync_otls()
 
     print("[1/4] ジオメトリを組む")
     bay, out, tip_node, hero_t, hero_r = build_geo()
